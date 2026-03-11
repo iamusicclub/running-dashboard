@@ -1,10 +1,9 @@
 
 export default function Home() {
   return (
-    <main style={{padding:40,fontFamily:"Arial"}}>
+    <main style={{ padding: 40, fontFamily: "Arial" }}>
       <h1>Running Dashboard</h1>
-
-      <p>Welcome to your running analytics dashboard.</p>
+      <p>Your running website is live.</p>
 
       <ul>
         <li><a href="/runs">Runs</a></li>
@@ -13,5 +12,5 @@ export default function Home() {
         <li><a href="/races">Race Planner</a></li>
       </ul>
     </main>
-  )
+  );
 }
