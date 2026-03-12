@@ -15,6 +15,37 @@ type Run = {
   elevation: string;
 };
 
+function calculatePace(time: string, distance: string) {
+  const distanceNum = parseFloat(distance);
+
+  if (!time || !distanceNum || distanceNum <= 0) {
+    return "N/A";
+  }
+
+  const parts = time.split(":").map(Number);
+
+  let totalSeconds = 0;
+
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts;
+    totalSeconds = minutes * 60 + seconds;
+  } else if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    totalSeconds = hours * 3600 + minutes * 60 + seconds;
+  } else {
+    return "N/A";
+  }
+
+  const paceSeconds = totalSeconds / distanceNum;
+  const paceMinutesPart = Math.floor(paceSeconds / 60);
+  const paceSecondsPart = Math.round(paceSeconds % 60);
+
+  const formattedSeconds =
+    paceSecondsPart < 10 ? `0${paceSecondsPart}` : `${paceSecondsPart}`;
+
+  return `${paceMinutesPart}:${formattedSeconds} /km`;
+}
+
 export default function RunsPage() {
   const [date, setDate] = useState("");
   const [distance, setDistance] = useState("");
@@ -107,7 +138,7 @@ export default function RunsPage() {
 
         <input
           type="text"
-          placeholder="Time (for example 42:15)"
+          placeholder="Time (for example 42:15 or 1:35:20)"
           value={time}
           onChange={(e) => setTime(e.target.value)}
           required
@@ -179,6 +210,7 @@ export default function RunsPage() {
             <p><strong>Date:</strong> {run.date}</p>
             <p><strong>Distance:</strong> {run.distance} km</p>
             <p><strong>Time:</strong> {run.time}</p>
+            <p><strong>Pace:</strong> {calculatePace(run.time, run.distance)}</p>
             <p><strong>Type:</strong> {run.runType}</p>
             <p><strong>Average HR:</strong> {run.avgHr}</p>
             <p><strong>Elevation:</strong> {run.elevation} m</p>
