@@ -10,6 +10,9 @@ type Run = {
   distance: string;
   time: string;
   notes: string;
+  runType: string;
+  avgHr: string;
+  elevation: string;
 };
 
 export default function RunsPage() {
@@ -17,8 +20,12 @@ export default function RunsPage() {
   const [distance, setDistance] = useState("");
   const [time, setTime] = useState("");
   const [notes, setNotes] = useState("");
+  const [runType, setRunType] = useState("");
+  const [avgHr, setAvgHr] = useState("");
+  const [elevation, setElevation] = useState("");
   const [runs, setRuns] = useState<Run[]>([]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   async function loadRuns() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
@@ -30,6 +37,9 @@ export default function RunsPage() {
       distance: String(doc.data().distance || ""),
       time: String(doc.data().time || ""),
       notes: doc.data().notes || "",
+      runType: doc.data().runType || "",
+      avgHr: String(doc.data().avgHr || ""),
+      elevation: String(doc.data().elevation || ""),
     }));
 
     setRuns(data);
@@ -42,21 +52,34 @@ export default function RunsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setError("");
 
-    await addDoc(collection(db, "runs"), {
-      date,
-      distance,
-      time,
-      notes,
-      createdAt: new Date().toISOString(),
-    });
+    try {
+      await addDoc(collection(db, "runs"), {
+        date,
+        distance,
+        time,
+        notes,
+        runType,
+        avgHr,
+        elevation,
+        createdAt: new Date().toISOString(),
+      });
 
-    setDate("");
-    setDistance("");
-    setTime("");
-    setNotes("");
-    await loadRuns();
-    setSaving(false);
+      setDate("");
+      setDistance("");
+      setTime("");
+      setNotes("");
+      setRunType("");
+      setAvgHr("");
+      setElevation("");
+
+      await loadRuns();
+    } catch (err: any) {
+      setError(err.message || "Something went wrong while saving.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -91,6 +114,37 @@ export default function RunsPage() {
           style={{ padding: 12 }}
         />
 
+        <select
+          value={runType}
+          onChange={(e) => setRunType(e.target.value)}
+          required
+          style={{ padding: 12 }}
+        >
+          <option value="">Select run type</option>
+          <option value="easy">Easy</option>
+          <option value="long">Long</option>
+          <option value="tempo">Tempo</option>
+          <option value="interval">Interval</option>
+          <option value="race">Race</option>
+          <option value="recovery">Recovery</option>
+        </select>
+
+        <input
+          type="number"
+          placeholder="Average heart rate"
+          value={avgHr}
+          onChange={(e) => setAvgHr(e.target.value)}
+          style={{ padding: 12 }}
+        />
+
+        <input
+          type="number"
+          placeholder="Elevation gain in metres"
+          value={elevation}
+          onChange={(e) => setElevation(e.target.value)}
+          style={{ padding: 12 }}
+        />
+
         <textarea
           placeholder="Notes"
           value={notes}
@@ -103,6 +157,12 @@ export default function RunsPage() {
           {saving ? "Saving..." : "Save Run"}
         </button>
       </form>
+
+      {error && (
+        <p style={{ color: "red", marginBottom: 16 }}>
+          {error}
+        </p>
+      )}
 
       <h2>Saved Runs</h2>
 
@@ -119,6 +179,9 @@ export default function RunsPage() {
             <p><strong>Date:</strong> {run.date}</p>
             <p><strong>Distance:</strong> {run.distance} km</p>
             <p><strong>Time:</strong> {run.time}</p>
+            <p><strong>Type:</strong> {run.runType}</p>
+            <p><strong>Average HR:</strong> {run.avgHr}</p>
+            <p><strong>Elevation:</strong> {run.elevation} m</p>
             <p><strong>Notes:</strong> {run.notes}</p>
           </div>
         ))}
