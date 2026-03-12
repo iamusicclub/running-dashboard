@@ -184,8 +184,8 @@ function analyseRun(run: Run, allRuns: Run[]) {
       label: "Threshold development",
       comment:
         "This kind of run is useful for improving sustained speed and lactate-threshold fitness.",
-      };
-    }
+    };
+  }
 
   if (run.runType === "interval") {
     if (signals.highHeartRate) {
@@ -246,6 +246,8 @@ export default function RunsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [aiError, setAiError] = useState("");
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState("");
 
   async function loadRuns() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
@@ -298,6 +300,7 @@ export default function RunsPage() {
     setSaving(true);
     setError("");
     setAiError("");
+    setBackfillMessage("");
 
     try {
       const docRef = await addDoc(collection(db, "runs"), {
@@ -346,6 +349,38 @@ export default function RunsPage() {
       setSaving(false);
     }
   }
+
+  async function handleBackfillAiAnalyses() {
+    setBackfilling(true);
+    setAiError("");
+    setBackfillMessage("");
+
+    try {
+      const missingRuns = runs.filter((run) => !run.aiAnalysis);
+
+      if (missingRuns.length === 0) {
+        setBackfillMessage("All runs already have AI analysis.");
+        setBackfilling(false);
+        return;
+      }
+
+      let completed = 0;
+
+      for (const run of missingRuns) {
+        await generateAndStoreAiAnalysis(run, runs);
+        completed += 1;
+      }
+
+      await loadRuns();
+      setBackfillMessage(`Generated AI analysis for ${completed} run${completed === 1 ? "" : "s"}.`);
+    } catch (err: any) {
+      setAiError(err.message || "Failed while generating missing AI analyses.");
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
+  const missingAnalysisCount = runs.filter((run) => !run.aiAnalysis).length;
 
   return (
     <main style={{ padding: 40, maxWidth: 900, margin: "0 auto" }}>
@@ -422,6 +457,34 @@ export default function RunsPage() {
           {saving ? "Saving run and generating AI analysis..." : "Save Run"}
         </button>
       </form>
+
+      <div
+        style={{
+          marginBottom: 24,
+          padding: 16,
+          borderRadius: 12,
+          border: "1px solid #ddd",
+          background: "#f8fafc",
+        }}
+      >
+        <p style={{ marginTop: 0 }}>
+          <strong>Missing AI analyses:</strong> {missingAnalysisCount}
+        </p>
+
+        <button
+          onClick={handleBackfillAiAnalyses}
+          disabled={backfilling || missingAnalysisCount === 0}
+          style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+        >
+          {backfilling ? "Generating missing AI analyses..." : "Generate Missing AI Analyses"}
+        </button>
+
+        {backfillMessage && (
+          <p style={{ color: "green", marginBottom: 0, marginTop: 12 }}>
+            {backfillMessage}
+          </p>
+        )}
+      </div>
 
       {error && (
         <p style={{ color: "red", marginBottom: 16 }}>
