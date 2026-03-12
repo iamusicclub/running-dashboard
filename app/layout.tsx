@@ -2,7 +2,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Running Dashboard",
-  description: "Running analytics, predictions, and training insights",
+  description: "Running analytics and race predictions",
 };
 
 export default function RootLayout({
@@ -12,25 +12,58 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <header className="site-header">
-          <div className="site-shell nav-inner">
-            <a href="/" className="brand">
+      <body style={{ margin: 0, fontFamily: "Arial, sans-serif", background: "#f4f7fc" }}>
+        <header
+          style={{
+            background: "#1d4ed8",
+            color: "white",
+            padding: "16px 24px",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 1100,
+              margin: "0 auto",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <a
+              href="/"
+              style={{
+                color: "white",
+                fontWeight: 700,
+                fontSize: 18,
+                textDecoration: "none",
+              }}
+            >
               Running Dashboard
             </a>
 
-            <nav className="top-nav">
-              <a href="/">Dashboard</a>
-              <a href="/runs">Runs</a>
-              <a href="/predictions">Predictions</a>
-              <a href="/analysis">Analysis</a>
-              <a href="/races">Races</a>
+            <nav style={{ display: "flex", gap: 16 }}>
+              <a style={navLink} href="/">Dashboard</a>
+              <a style={navLink} href="/runs">Runs</a>
+              <a style={navLink} href="/predictions">Predictions</a>
+              <a style={navLink} href="/analysis">Analysis</a>
+              <a style={navLink} href="/races">Races</a>
             </nav>
           </div>
         </header>
 
-        <div className="site-shell page-wrap">{children}</div>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
+          {children}
+        </div>
       </body>
     </html>
   );
 }
+
+const navLink: React.CSSProperties = {
+  color: "white",
+  textDecoration: "none",
+  fontWeight: 500,
+  padding: "6px 10px",
+  borderRadius: 6,
+};
