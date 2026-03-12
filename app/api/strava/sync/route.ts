@@ -1,6 +1,12 @@
-
 import { NextRequest, NextResponse } from "next/server";
-import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { db } from "../../../../lib/firebase";
 
 async function refreshAccessTokenIfNeeded(connection: any) {
@@ -51,10 +57,30 @@ async function refreshAccessTokenIfNeeded(connection: any) {
   return updatedConnection;
 }
 
-function mapStravaSportTypeToRunType(sportType: string) {
-  const value = (sportType || "").toLowerCase();
+function secondsToDisplayTime(totalSeconds: number) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
-  if (value.includes("run")) return "easy";
+  if (hours > 0) {
+    return `${hours}:${minutes < 10 ? `0${minutes}` : minutes}:${
+      seconds < 10 ? `0${seconds}` : seconds
+    }`;
+  }
+
+  return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
+}
+
+function mapStravaRunType(activity: any) {
+  const sportType = String(activity.sport_type || activity.type || "").toLowerCase();
+  const workoutType = activity.workout_type;
+
+  if (sportType.includes("trail")) return "long";
+  if (workoutType === 1) return "race";
+  if (workoutType === 2) return "long";
+  if (workoutType === 3) return "workout";
+  if (sportType.includes("run")) return "easy";
+
   return "other";
 }
 
@@ -117,15 +143,49 @@ export async function POST(req: NextRequest) {
 
       const runId = `strava_${activity.id}`;
 
-      const movingTime = Number(activity.moving_time || 0);
-      const hours = Math.floor(movingTime / 3600);
-      const minutes = Math.floor((movingTime % 3600) / 60);
-      const seconds = movingTime % 60;
+      const distanceMeters = Number(activity.distance || 0);
+      const distanceKm = distanceMeters / 1000;
 
-      const formattedTime =
-        hours > 0
-          ? `${hours}:${minutes < 10 ? `0${minutes}` : minutes}:${seconds < 10 ? `0${seconds}` : seconds}`
-          : `${minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
+      const movingTimeSeconds = Number(activity.moving_time || 0);
+      const elapsedTimeSeconds = Number(activity.elapsed_time || 0);
+
+      const averageHeartrate = activity.average_heartrate
+        ? Number(activity.average_heartrate)
+        : null;
+
+      const maxHeartrate = activity.max_heartrate
+        ? Number(activity.max_heartrate)
+        : null;
+
+      const averageCadence = activity.average_cadence
+        ? Number(activity.average_cadence)
+        : null;
+
+      const averageSpeedMps = activity.average_speed
+        ? Number(activity.average_speed)
+        : null;
+
+      const maxSpeedMps = activity.max_speed
+        ? Number(activity.max_speed)
+        : null;
+
+      const totalElevationGain = activity.total_elevation_gain
+        ? Number(activity.total_elevation_gain)
+        : 0;
+
+      const paceSecondsPerKm =
+        distanceKm > 0 && movingTimeSeconds > 0
+          ? movingTimeSeconds / distanceKm
+          : null;
+
+      const averagePaceDisplay =
+        paceSecondsPerKm !== null
+          ? `${Math.floor(paceSecondsPerKm / 60)}:${
+              Math.round(paceSecondsPerKm % 60) < 10
+                ? `0${Math.round(paceSecondsPerKm % 60)}`
+                : Math.round(paceSecondsPerKm % 60)
+            }`
+          : "";
 
       await setDoc(
         doc(db, "runs", runId),
@@ -133,18 +193,54 @@ export async function POST(req: NextRequest) {
           source: "strava",
           stravaActivityId: String(activity.id),
           athleteId: String(connection.athleteId),
+
           date: activity.start_date_local
             ? String(activity.start_date_local).slice(0, 10)
             : "",
-          distance: ((activity.distance || 0) / 1000).toFixed(2),
-          time: formattedTime,
+
+          startDate: activity.start_date || "",
+          startDateLocal: activity.start_date_local || "",
+
+          name: activity.name || "",
           notes: activity.name || "",
-          runType: mapStravaSportTypeToRunType(sportType),
-          avgHr: activity.average_heartrate ? String(Math.round(activity.average_heartrate)) : "",
-          elevation: activity.total_elevation_gain
-            ? String(Math.round(activity.total_elevation_gain))
-            : "",
+
+          distance: distanceKm.toFixed(2),
+          distanceMeters,
+
+          time: secondsToDisplayTime(movingTimeSeconds),
+          movingTimeSeconds,
+          elapsedTimeSeconds,
+
+          pace: averagePaceDisplay,
+          paceSecondsPerKm,
+
+          runType: mapStravaRunType(activity),
           rawSportType: sportType,
+          workoutType: activity.workout_type ?? null,
+
+          avgHr: averageHeartrate ? String(Math.round(averageHeartrate)) : "",
+          averageHeartrate,
+          maxHeartrate,
+
+          elevation: String(Math.round(totalElevationGain)),
+          totalElevationGain,
+
+          averageCadence,
+          averageSpeedMps,
+          maxSpeedMps,
+
+          trainer: !!activity.trainer,
+          commute: !!activity.commute,
+          manual: !!activity.manual,
+          private: !!activity.private,
+
+          achievementCount: Number(activity.achievement_count || 0),
+          kudosCount: Number(activity.kudos_count || 0),
+
+          aiAnalysis: null,
+
+          rawStrava: activity,
+          updatedAt: new Date().toISOString(),
           createdAt: new Date().toISOString(),
         },
         { merge: true }
