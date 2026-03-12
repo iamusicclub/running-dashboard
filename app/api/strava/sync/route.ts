@@ -63,9 +63,7 @@ function secondsToDisplayTime(totalSeconds: number) {
   const seconds = totalSeconds % 60;
 
   if (hours > 0) {
-    return `${hours}:${minutes < 10 ? `0${minutes}` : minutes}:${
-      seconds < 10 ? `0${seconds}` : seconds
-    }`;
+    return `${hours}:${minutes < 10 ? `0${minutes}` : minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
   }
 
   return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
@@ -90,10 +88,7 @@ export async function POST(req: NextRequest) {
     const athleteId = body?.athleteId;
 
     if (!athleteId) {
-      return NextResponse.json(
-        { error: "athleteId is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "athleteId is required." }, { status: 400 });
     }
 
     const connectionQuery = query(
@@ -113,27 +108,38 @@ export async function POST(req: NextRequest) {
     let connection = connectionSnapshot.docs[0].data();
     connection = await refreshAccessTokenIfNeeded(connection);
 
-    const activitiesResponse = await fetch(
-      "https://www.strava.com/api/v3/athlete/activities?per_page=50&page=1",
-      {
-        headers: {
-          Authorization: `Bearer ${connection.accessToken}`,
-        },
-      }
-    );
+    const allActivities: any[] = [];
 
-    const activities = await activitiesResponse.json();
-
-    if (!activitiesResponse.ok) {
-      return NextResponse.json(
-        { error: activities?.message || "Failed to fetch Strava activities." },
-        { status: 500 }
+    // Pull 2 pages of activities (50 each) = 100 runs
+    for (let page = 1; page <= 2; page++) {
+      const response = await fetch(
+        `https://www.strava.com/api/v3/athlete/activities?per_page=50&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${connection.accessToken}`,
+          },
+        }
       );
+
+      const pageActivities = await response.json();
+
+      if (!response.ok) {
+        return NextResponse.json(
+          { error: pageActivities?.message || "Failed to fetch Strava activities." },
+          { status: 500 }
+        );
+      }
+
+      if (!Array.isArray(pageActivities) || pageActivities.length === 0) {
+        break;
+      }
+
+      allActivities.push(...pageActivities);
     }
 
     let imported = 0;
 
-    for (const activity of activities) {
+    for (const activity of allActivities) {
       const sportType = activity.sport_type || activity.type || "";
       const allowedSports = ["Run", "TrailRun", "VirtualRun"];
 
@@ -155,18 +161,6 @@ export async function POST(req: NextRequest) {
 
       const maxHeartrate = activity.max_heartrate
         ? Number(activity.max_heartrate)
-        : null;
-
-      const averageCadence = activity.average_cadence
-        ? Number(activity.average_cadence)
-        : null;
-
-      const averageSpeedMps = activity.average_speed
-        ? Number(activity.average_speed)
-        : null;
-
-      const maxSpeedMps = activity.max_speed
-        ? Number(activity.max_speed)
         : null;
 
       const totalElevationGain = activity.total_elevation_gain
@@ -225,18 +219,6 @@ export async function POST(req: NextRequest) {
           elevation: String(Math.round(totalElevationGain)),
           totalElevationGain,
 
-          averageCadence,
-          averageSpeedMps,
-          maxSpeedMps,
-
-          trainer: !!activity.trainer,
-          commute: !!activity.commute,
-          manual: !!activity.manual,
-          private: !!activity.private,
-
-          achievementCount: Number(activity.achievement_count || 0),
-          kudosCount: Number(activity.kudos_count || 0),
-
           aiAnalysis: null,
 
           rawStrava: activity,
@@ -246,12 +228,13 @@ export async function POST(req: NextRequest) {
         { merge: true }
       );
 
-      imported += 1;
+      imported++;
     }
 
     return NextResponse.json({
       success: true,
       imported,
+      totalFetched: allActivities.length,
     });
   } catch (error: any) {
     return NextResponse.json(
