@@ -1,8 +1,14 @@
-import "./globals.css";
-
 export const metadata = {
   title: "Running Dashboard",
   description: "Running analytics and race predictions",
+};
+
+const navLink: React.CSSProperties = {
+  color: "white",
+  textDecoration: "none",
+  fontWeight: 500,
+  padding: "6px 10px",
+  borderRadius: 6,
 };
 
 export default function RootLayout({
@@ -12,7 +18,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: "Arial, sans-serif", background: "#f4f7fc" }}>
+      <body
+        style={{
+          margin: 0,
+          fontFamily: "Arial, sans-serif",
+          background: "#f4f7fc",
+        }}
+      >
         <header
           style={{
             background: "#1d4ed8",
@@ -28,6 +40,8 @@ export default function RootLayout({
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
+              gap: 16,
+              flexWrap: "wrap",
             }}
           >
             <a
@@ -42,7 +56,7 @@ export default function RootLayout({
               Running Dashboard
             </a>
 
-            <nav style={{ display: "flex", gap: 16 }}>
+            <nav style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
               <a style={navLink} href="/">Dashboard</a>
               <a style={navLink} href="/runs">Runs</a>
               <a style={navLink} href="/predictions">Predictions</a>
@@ -59,11 +73,3 @@ export default function RootLayout({
     </html>
   );
 }
-
-const navLink: React.CSSProperties = {
-  color: "white",
-  textDecoration: "none",
-  fontWeight: 500,
-  padding: "6px 10px",
-  borderRadius: 6,
-};
