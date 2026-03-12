@@ -15,6 +15,15 @@ type Run = {
   elevation: string;
 };
 
+type AiRunAnalysis = {
+  headline: string;
+  summary: string;
+  what_went_well: string[];
+  watchouts: string[];
+  impact_on_training: string;
+  next_step: string;
+};
+
 function calculatePaceSeconds(time: string, distance: string) {
   const distanceNum = parseFloat(distance);
 
@@ -166,7 +175,7 @@ function analyseRun(run: Run, allRuns: Run[]) {
       label: "Threshold development",
       comment:
         "This kind of run is useful for improving sustained speed and lactate-threshold fitness.",
-      };
+    };
   }
 
   if (run.runType === "interval") {
@@ -227,6 +236,9 @@ export default function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
+  const [aiError, setAiError] = useState("");
+  const [aiResults, setAiResults] = useState<Record<string, AiRunAnalysis>>({});
 
   async function loadRuns() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
@@ -283,8 +295,41 @@ export default function RunsPage() {
     }
   }
 
+  async function generateAiAnalysis(run: Run) {
+    setAiLoadingId(run.id);
+    setAiError("");
+
+    try {
+      const response = await fetch("/api/run-analysis", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          run,
+          allRuns: runs,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to generate AI run analysis.");
+      }
+
+      setAiResults((prev) => ({
+        ...prev,
+        [run.id]: data,
+      }));
+    } catch (err: any) {
+      setAiError(err.message || "Failed to generate AI run analysis.");
+    } finally {
+      setAiLoadingId(null);
+    }
+  }
+
   return (
-    <main style={{ padding: 40, maxWidth: 800, margin: "0 auto" }}>
+    <main style={{ padding: 40, maxWidth: 900, margin: "0 auto" }}>
       <h1>Runs</h1>
 
       <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 32 }}>
@@ -365,20 +410,28 @@ export default function RunsPage() {
         </p>
       )}
 
+      {aiError && (
+        <p style={{ color: "red", marginBottom: 16 }}>
+          {aiError}
+        </p>
+      )}
+
       <h2>Saved Runs</h2>
 
       <div style={{ display: "grid", gap: 16 }}>
         {runs.map((run) => {
           const analysis = analyseRun(run, runs);
           const signals = calculateTrainingSignals(run, runs);
+          const aiAnalysis = aiResults[run.id];
 
           return (
             <div
               key={run.id}
               style={{
                 border: "1px solid #ddd",
-                borderRadius: 8,
+                borderRadius: 12,
                 padding: 16,
+                background: "white",
               }}
             >
               <p><strong>Date:</strong> {run.date}</p>
@@ -404,6 +457,56 @@ export default function RunsPage() {
               </div>
 
               <p><strong>Notes:</strong> {run.notes}</p>
+
+              <div style={{ marginTop: 16 }}>
+                <button
+                  onClick={() => generateAiAnalysis(run)}
+                  disabled={aiLoadingId === run.id}
+                  style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+                >
+                  {aiLoadingId === run.id ? "Generating AI analysis..." : "Generate AI Run Analysis"}
+                </button>
+              </div>
+
+              {aiAnalysis && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 16,
+                    borderRadius: 10,
+                    background: "#f8fafc",
+                    border: "1px solid #e5e7eb",
+                  }}
+                >
+                  <h3 style={{ marginTop: 0 }}>{aiAnalysis.headline}</h3>
+                  <p>{aiAnalysis.summary}</p>
+
+                  {aiAnalysis.what_went_well.length > 0 && (
+                    <>
+                      <p><strong>What went well</strong></p>
+                      <ul>
+                        {aiAnalysis.what_went_well.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                  {aiAnalysis.watchouts.length > 0 && (
+                    <>
+                      <p><strong>What to watch</strong></p>
+                      <ul>
+                        {aiAnalysis.watchouts.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                  <p><strong>Impact on training:</strong> {aiAnalysis.impact_on_training}</p>
+                  <p><strong>Next step:</strong> {aiAnalysis.next_step}</p>
+                </div>
+              )}
             </div>
           );
         })}
