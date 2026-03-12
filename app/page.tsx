@@ -457,7 +457,7 @@ function buildPrediction(runs: Run[], race: string, distanceKm: number): RacePre
     distanceKm,
     predictedSeconds,
     predictedTime: secondsToTime(predictedSeconds),
-    targetPace: formatPace(predictedSeconds, distanceKm),
+    targetPace: formatPaceFromSeconds(predictedSeconds / distanceKm),
     confidence,
     reason,
   };
@@ -505,7 +505,10 @@ function buildWeeklyBuckets(runs: Run[]) {
     bucket.totalRuns += 1;
   }
 
-  return Array.from(map.values()).slice(-6);
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-6)
+    .map(([, value]) => value);
 }
 
 function getAveragePaceSeconds(runs: Run[]) {
