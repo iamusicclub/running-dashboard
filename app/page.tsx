@@ -13,6 +13,40 @@ type Run = {
   runType: string;
   avgHr: string;
   elevation: string;
+
+  source?: string;
+  stravaActivityId?: string;
+  athleteId?: string;
+
+  startDate?: string;
+  startDateLocal?: string;
+  name?: string;
+
+  distanceMeters?: number;
+  movingTimeSeconds?: number;
+  elapsedTimeSeconds?: number;
+
+  pace?: string;
+  paceSecondsPerKm?: number | null;
+
+  rawSportType?: string;
+  workoutType?: number | null;
+
+  averageHeartrate?: number | null;
+  maxHeartrate?: number | null;
+
+  totalElevationGain?: number;
+  averageCadence?: number | null;
+  averageSpeedMps?: number | null;
+  maxSpeedMps?: number | null;
+
+  trainer?: boolean;
+  commute?: boolean;
+  manual?: boolean;
+  private?: boolean;
+
+  achievementCount?: number;
+  kudosCount?: number;
 };
 
 type WeeklyBucket = {
@@ -20,6 +54,25 @@ type WeeklyBucket = {
   label: string;
   totalDistance: number;
   totalRuns: number;
+};
+
+type CandidateRun = {
+  run: Run;
+  distanceKm: number;
+  timeSeconds: number;
+  paceSecondsPerKm: number;
+  score: number;
+  reasons: string[];
+};
+
+type RacePrediction = {
+  race: string;
+  distanceKm: number;
+  predictedSeconds: number;
+  predictedTime: string;
+  targetPace: string;
+  confidence: string;
+  reason: string;
 };
 
 function timeToSeconds(time: string) {
@@ -92,89 +145,322 @@ function predictTime(baseDistance: number, baseTime: number, targetDistance: num
   return baseTime * Math.pow(targetDistance / baseDistance, 1.06);
 }
 
-function getRunQualityScore(run: Run) {
-  const distance = parseFloat(run.distance || "0");
-  const seconds = timeToSeconds(run.time);
-  const avgHr = parseFloat(run.avgHr || "0");
+function getRunDistanceKm(run: Run) {
+  if (run.distanceMeters && run.distanceMeters > 0) {
+    return run.distanceMeters / 1000;
+  }
 
-  if (!distance || !seconds) return 0;
-  if (distance < 3) return 0;
+  const parsed = parseFloat(run.distance || "0");
+  return parsed > 0 ? parsed : 0;
+}
+
+function getRunTimeSeconds(run: Run) {
+  if (run.movingTimeSeconds && run.movingTimeSeconds > 0) {
+    return run.movingTimeSeconds;
+  }
+
+  return timeToSeconds(run.time || "") || 0;
+}
+
+function getRunPaceSeconds(run: Run) {
+  if (run.paceSecondsPerKm && run.paceSecondsPerKm > 0) {
+    return run.paceSecondsPerKm;
+  }
+
+  const distanceKm = getRunDistanceKm(run);
+  const timeSeconds = getRunTimeSeconds(run);
+
+  if (!distanceKm || !timeSeconds) {
+    return 0;
+  }
+
+  return timeSeconds / distanceKm;
+}
+
+function getDaysAgo(runDate: string) {
+  if (!runDate) return 9999;
+
+  const today = new Date();
+  const date = new Date(runDate);
+
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+
+  const diff = today.getTime() - date.getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+function getRunQualityScore(run: Run) {
+  const distanceKm = getRunDistanceKm(run);
+  const timeSeconds = getRunTimeSeconds(run);
+  const avgHr =
+    run.averageHeartrate && run.averageHeartrate > 0
+      ? run.averageHeartrate
+      : parseFloat(run.avgHr || "0");
+  const daysAgo = getDaysAgo(run.date);
+
+  if (!distanceKm || !timeSeconds || distanceKm < 3) {
+    return { score: 0, reasons: ["Too short to use for race prediction"] };
+  }
 
   let score = 0;
+  const reasons: string[] = [];
 
-  if (run.runType === "race") score += 5;
-  if (run.runType === "tempo") score += 4;
-  if (run.runType === "interval") score += 3;
-  if (run.runType === "long") score += 2;
-  if (run.runType === "easy") score += 1;
-  if (run.runType === "recovery") score += 0.5;
+  if (run.runType === "race" || run.workoutType === 1) {
+    score += 12;
+    reasons.push("Race effort");
+  } else if (run.runType === "tempo") {
+    score += 9;
+    reasons.push("Tempo effort");
+  } else if (run.runType === "interval") {
+    score += 7;
+    reasons.push("Interval effort");
+  } else if (run.runType === "long") {
+    score += 6;
+    reasons.push("Long run");
+  } else if (run.runType === "easy") {
+    score += 3;
+    reasons.push("Easy run");
+  } else if (run.runType === "recovery") {
+    score += 1;
+    reasons.push("Recovery run");
+  } else {
+    score += 2;
+    reasons.push("General run");
+  }
 
-  if (distance >= 5) score += 1;
-  if (distance >= 10) score += 1;
-  if (distance >= 16) score += 1;
+  if (distanceKm >= 5) {
+    score += 2;
+    reasons.push("Useful distance");
+  }
 
-  if (avgHr >= 150) score += 1;
+  if (distanceKm >= 10) {
+    score += 2;
+    reasons.push("Strong endurance evidence");
+  }
 
-  return score;
+  if (distanceKm >= 16) {
+    score += 3;
+    reasons.push("Long-distance evidence");
+  }
+
+  if (avgHr >= 150) {
+    score += 2;
+    reasons.push("Likely harder effort");
+  }
+
+  if (avgHr >= 165) {
+    score += 1;
+    reasons.push("High aerobic/threshold strain");
+  }
+
+  if (daysAgo <= 7) {
+    score += 4;
+    reasons.push("Very recent");
+  } else if (daysAgo <= 21) {
+    score += 3;
+    reasons.push("Recent");
+  } else if (daysAgo <= 42) {
+    score += 1;
+    reasons.push("Still relevant");
+  } else {
+    score -= 2;
+    reasons.push("Older evidence");
+  }
+
+  if (run.totalElevationGain && run.totalElevationGain > 200) {
+    score -= 1;
+    reasons.push("Hilly route may distort pace");
+  }
+
+  if (run.trainer) {
+    score -= 2;
+    reasons.push("Indoor/trainer effort");
+  }
+
+  return { score, reasons };
 }
 
-function getRecentRuns(runs: Run[]) {
-  return [...runs]
-    .filter((run) => {
-      const distance = parseFloat(run.distance || "0");
-      const seconds = timeToSeconds(run.time);
-      return distance >= 3 && !!seconds;
-    })
-    .slice(0, 8);
-}
-
-function getBestSupportingRuns(runs: Run[]) {
-  return getRecentRuns(runs)
+function getPredictionCandidates(runs: Run[]) {
+  return runs
     .map((run) => {
-      const distance = parseFloat(run.distance || "0");
-      const seconds = timeToSeconds(run.time)!;
-      const pace = seconds / distance;
-      const score = getRunQualityScore(run);
+      const distanceKm = getRunDistanceKm(run);
+      const timeSeconds = getRunTimeSeconds(run);
+      const paceSecondsPerKm = getRunPaceSeconds(run);
+      const quality = getRunQualityScore(run);
 
       return {
         run,
-        distance,
-        seconds,
-        pace,
-        score,
-      };
+        distanceKm,
+        timeSeconds,
+        paceSecondsPerKm,
+        score: quality.score,
+        reasons: quality.reasons,
+      } as CandidateRun;
     })
+    .filter((item) => item.distanceKm >= 3 && item.timeSeconds > 0 && item.score > 0)
     .sort((a, b) => {
-      const aValue = a.pace / (1 + a.score * 0.05);
-      const bValue = b.pace / (1 + b.score * 0.05);
+      const aValue = a.paceSecondsPerKm / (1 + a.score * 0.035);
+      const bValue = b.paceSecondsPerKm / (1 + b.score * 0.035);
       return aValue - bValue;
     })
     .slice(0, 8);
 }
 
-function getPredictedSecondsForDistance(runs: Run[], targetDistance: number) {
-  const supportingRuns = getBestSupportingRuns(runs);
+function getDistanceSpecificWeight(candidate: CandidateRun, targetDistanceKm: number) {
+  const sourceDistance = candidate.distanceKm;
+  const distanceRatio =
+    Math.min(sourceDistance, targetDistanceKm) / Math.max(sourceDistance, targetDistanceKm);
 
-  if (supportingRuns.length === 0) {
+  let weight = candidate.score + 1;
+  weight *= 0.55 + distanceRatio * 0.9;
+
+  if (targetDistanceKm <= 10) {
+    if (
+      candidate.run.runType === "race" ||
+      candidate.run.runType === "tempo" ||
+      candidate.run.runType === "interval"
+    ) {
+      weight *= 1.15;
+    }
+    if (candidate.run.runType === "long") {
+      weight *= 0.9;
+    }
+  }
+
+  if (targetDistanceKm > 10 && targetDistanceKm <= 21.1) {
+    if (candidate.run.runType === "tempo" || candidate.run.runType === "race") {
+      weight *= 1.1;
+    }
+    if (candidate.distanceKm >= 10) {
+      weight *= 1.08;
+    }
+  }
+
+  if (targetDistanceKm > 21.1) {
+    if (candidate.run.runType === "long") {
+      weight *= 1.18;
+    }
+    if (candidate.distanceKm >= 16) {
+      weight *= 1.2;
+    }
+    if (candidate.distanceKm < 5) {
+      weight *= 0.75;
+    }
+  }
+
+  return weight;
+}
+
+function getWeeklyMileage(runs: Run[]) {
+  const last28Days = runs.filter((run) => getDaysAgo(run.date) <= 28);
+  const totalDistance = last28Days.reduce((sum, run) => sum + getRunDistanceKm(run), 0);
+  return totalDistance / 4;
+}
+
+function getLongestRecentRun(runs: Run[]) {
+  return runs
+    .filter((run) => getDaysAgo(run.date) <= 42)
+    .reduce((max, run) => Math.max(max, getRunDistanceKm(run)), 0);
+}
+
+function buildPrediction(runs: Run[], race: string, distanceKm: number): RacePrediction | null {
+  const candidates = getPredictionCandidates(runs);
+
+  if (candidates.length === 0) {
     return null;
   }
 
-  const weightedPredictions = supportingRuns.map((item) => {
-    const predicted = predictTime(item.distance, item.seconds, targetDistance);
-    const weight = item.score + 1;
-    return { predicted, weight };
+  const weightedPredictions = candidates.map((candidate) => {
+    const predictedSeconds = predictTime(candidate.distanceKm, candidate.timeSeconds, distanceKm);
+    const weight = getDistanceSpecificWeight(candidate, distanceKm);
+
+    return {
+      candidate,
+      predictedSeconds,
+      weight,
+    };
   });
 
   const weightedSum = weightedPredictions.reduce(
-    (sum, item) => sum + item.predicted * item.weight,
+    (sum, item) => sum + item.predictedSeconds * item.weight,
     0
   );
-  const totalWeight = weightedPredictions.reduce(
-    (sum, item) => sum + item.weight,
-    0
-  );
+  const totalWeight = weightedPredictions.reduce((sum, item) => sum + item.weight, 0);
 
-  return weightedSum / totalWeight;
+  let predictedSeconds = weightedSum / totalWeight;
+
+  const weeklyMileage = getWeeklyMileage(runs);
+  const longestRun = getLongestRecentRun(runs);
+
+  if (distanceKm === 42.2) {
+    if (weeklyMileage < 30) {
+      predictedSeconds *= 1.03;
+    }
+    if (longestRun < 18) {
+      predictedSeconds *= 1.035;
+    }
+  }
+
+  if (distanceKm === 21.1) {
+    if (weeklyMileage < 25) {
+      predictedSeconds *= 1.015;
+    }
+    if (longestRun < 14) {
+      predictedSeconds *= 1.02;
+    }
+  }
+
+  let confidence = "Moderate";
+  let reason = "Built from several recent runs with weighted relevance.";
+
+  const raceLikeRuns = candidates.filter(
+    (c) => c.run.runType === "race" || c.run.runType === "tempo"
+  ).length;
+
+  if (distanceKm <= 10) {
+    if (raceLikeRuns >= 2) {
+      confidence = "High";
+      reason =
+        "Supported by recent harder efforts that are strongly relevant to shorter-distance fitness.";
+    } else if (candidates.length < 3) {
+      confidence = "Low";
+      reason = "There is limited recent evidence for sharper race prediction.";
+    }
+  }
+
+  if (distanceKm === 21.1) {
+    if (weeklyMileage >= 30 && longestRun >= 16) {
+      confidence = "Moderate";
+      reason = "Supported by a decent amount of endurance evidence plus faster efforts.";
+    } else {
+      confidence = "Low";
+      reason =
+        "Half-marathon prediction is still being projected from shorter or less endurance-specific data.";
+    }
+  }
+
+  if (distanceKm === 42.2) {
+    if (weeklyMileage >= 40 && longestRun >= 24) {
+      confidence = "Moderate";
+      reason =
+        "There is meaningful endurance evidence, but marathon prediction remains harder than shorter-distance forecasting.";
+    } else {
+      confidence = "Low";
+      reason =
+        "Marathon prediction is speculative because the recent data does not yet show enough marathon-specific volume or long-run depth.";
+    }
+  }
+
+  return {
+    race,
+    distanceKm,
+    predictedSeconds,
+    predictedTime: secondsToTime(predictedSeconds),
+    targetPace: formatPace(predictedSeconds, distanceKm),
+    confidence,
+    reason,
+  };
 }
 
 function getWeekStart(date: Date) {
@@ -203,7 +489,7 @@ function buildWeeklyBuckets(runs: Run[]) {
     const runDate = new Date(run.date);
     const weekStart = getWeekStart(runDate);
     const key = weekStart.toISOString().slice(0, 10);
-    const distance = parseFloat(run.distance || "0");
+    const distance = getRunDistanceKm(run);
 
     if (!map.has(key)) {
       map.set(key, {
@@ -224,8 +510,8 @@ function buildWeeklyBuckets(runs: Run[]) {
 
 function getAveragePaceSeconds(runs: Run[]) {
   const paces = runs
-    .map((run) => calculatePaceSeconds(run.time, run.distance))
-    .filter((pace): pace is number => pace !== null);
+    .map((run) => getRunPaceSeconds(run))
+    .filter((pace) => pace > 0);
 
   if (paces.length === 0) {
     return null;
@@ -239,7 +525,7 @@ function getThisWeekDistance(runs: Run[]) {
 
   return runs.reduce((sum, run) => {
     const runDate = new Date(run.date);
-    const distance = parseFloat(run.distance || "0");
+    const distance = getRunDistanceKm(run);
 
     if (runDate >= startOfWeek) {
       return sum + distance;
@@ -256,7 +542,7 @@ function getLastWeekDistance(runs: Run[]) {
 
   return runs.reduce((sum, run) => {
     const runDate = new Date(run.date);
-    const distance = parseFloat(run.distance || "0");
+    const distance = getRunDistanceKm(run);
 
     if (runDate >= lastWeekStart && runDate < thisWeekStart) {
       return sum + distance;
@@ -287,18 +573,16 @@ function getDashboardSummary(runs: Run[]) {
     return "Start by logging a few runs or syncing Strava. Once there is more data, the dashboard will show clearer trends in volume, pace, and race readiness.";
   }
 
-  const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
+  const totalDistance = runs.reduce((sum, run) => sum + getRunDistanceKm(run), 0);
   const averageDistance = totalDistance / runs.length;
-  const longestRun = Math.max(...runs.map((run) => parseFloat(run.distance || "0")), 0);
+  const longestRun = Math.max(...runs.map((run) => getRunDistanceKm(run)), 0);
   const averagePace = formatPaceFromSeconds(getAveragePaceSeconds(runs));
   const thisWeek = getThisWeekDistance(runs);
   const lastWeek = getLastWeekDistance(runs);
 
   let message = `You have logged ${runs.length} runs covering ${totalDistance.toFixed(
     1
-  )} km. Average run distance is ${averageDistance.toFixed(
-    1
-  )} km and average pace is ${averagePace}.`;
+  )} km. Average run distance is ${averageDistance.toFixed(1)} km and average pace is ${averagePace}.`;
 
   if (thisWeek > lastWeek * 1.1 && lastWeek > 0) {
     message += " Weekly volume is building compared with last week.";
@@ -347,32 +631,54 @@ function StatCard({
   );
 }
 
-function PredictionCard({
-  label,
-  time,
-  pace,
-}: {
-  label: string;
-  time: string;
-  pace: string;
-}) {
+function PredictionCard({ prediction }: { prediction: RacePrediction }) {
+  const confidenceColor =
+    prediction.confidence === "High"
+      ? "#065f46"
+      : prediction.confidence === "Moderate"
+      ? "#92400e"
+      : "#991b1b";
+
+  const confidenceBg =
+    prediction.confidence === "High"
+      ? "#d1fae5"
+      : prediction.confidence === "Moderate"
+      ? "#fef3c7"
+      : "#fee2e2";
+
   return (
     <div
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
         borderRadius: 18,
-        padding: 18,
+        padding: 20,
         boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
       }}
     >
-      <p style={{ margin: 0, fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 }}>
-        {label}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <h3 style={{ margin: 0, color: "#111827" }}>{prediction.race}</h3>
+        <span
+          style={{
+            padding: "6px 10px",
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+            background: confidenceBg,
+            color: confidenceColor,
+          }}
+        >
+          {prediction.confidence}
+        </span>
+      </div>
+
+      <p style={{ margin: "0 0 8px 0", fontSize: 32, fontWeight: 700, color: "#111827" }}>
+        {prediction.predictedTime}
       </p>
-      <p style={{ margin: "10px 0 4px 0", fontSize: 28, fontWeight: 700, color: "#111827" }}>
-        {time}
+      <p style={{ margin: "0 0 14px 0", color: "#4b5563" }}>
+        Target pace: {prediction.targetPace}
       </p>
-      <p style={{ margin: 0, fontSize: 14, color: "#4b5563" }}>{pace}</p>
+      <p style={{ margin: 0, color: "#374151", lineHeight: 1.5 }}>{prediction.reason}</p>
     </div>
   );
 }
@@ -408,6 +714,30 @@ function MileageBar({
           }}
         />
       </div>
+    </div>
+  );
+}
+
+function CandidateCard({ candidate }: { candidate: CandidateRun }) {
+  return (
+    <div
+      style={{
+        padding: 14,
+        borderRadius: 14,
+        border: "1px solid #e5e7eb",
+        background: "#f8fafc",
+      }}
+    >
+      <p style={{ margin: 0, fontWeight: 700 }}>
+        {candidate.run.date} · {candidate.distanceKm.toFixed(2)} km in {secondsToTime(candidate.timeSeconds)}
+      </p>
+      <p style={{ margin: "6px 0 8px 0", color: "#4b5563" }}>
+        {candidate.run.runType || "unknown"} · {formatPaceFromSeconds(candidate.paceSecondsPerKm)} · HR{" "}
+        {candidate.run.averageHeartrate || candidate.run.avgHr || "N/A"}
+      </p>
+      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>
+        Score: {candidate.score.toFixed(1)} · {candidate.reasons.join(", ")}
+      </p>
     </div>
   );
 }
@@ -457,6 +787,31 @@ export default function HomePage() {
       runType: docSnap.data().runType || "",
       avgHr: String(docSnap.data().avgHr || ""),
       elevation: String(docSnap.data().elevation || ""),
+      source: docSnap.data().source || "",
+      stravaActivityId: docSnap.data().stravaActivityId || "",
+      athleteId: docSnap.data().athleteId || "",
+      startDate: docSnap.data().startDate || "",
+      startDateLocal: docSnap.data().startDateLocal || "",
+      name: docSnap.data().name || "",
+      distanceMeters: docSnap.data().distanceMeters || null,
+      movingTimeSeconds: docSnap.data().movingTimeSeconds || null,
+      elapsedTimeSeconds: docSnap.data().elapsedTimeSeconds || null,
+      pace: docSnap.data().pace || "",
+      paceSecondsPerKm: docSnap.data().paceSecondsPerKm || null,
+      rawSportType: docSnap.data().rawSportType || "",
+      workoutType: docSnap.data().workoutType ?? null,
+      averageHeartrate: docSnap.data().averageHeartrate || null,
+      maxHeartrate: docSnap.data().maxHeartrate || null,
+      totalElevationGain: docSnap.data().totalElevationGain || 0,
+      averageCadence: docSnap.data().averageCadence || null,
+      averageSpeedMps: docSnap.data().averageSpeedMps || null,
+      maxSpeedMps: docSnap.data().maxSpeedMps || null,
+      trainer: !!docSnap.data().trainer,
+      commute: !!docSnap.data().commute,
+      manual: !!docSnap.data().manual,
+      private: !!docSnap.data().private,
+      achievementCount: docSnap.data().achievementCount || 0,
+      kudosCount: docSnap.data().kudosCount || 0,
     }));
 
     setRuns(data);
@@ -471,20 +826,27 @@ export default function HomePage() {
   const maxWeeklyDistance = Math.max(...weeklyBuckets.map((w) => w.totalDistance), 0);
 
   const totalRuns = runs.length;
-  const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
+  const totalDistance = runs.reduce((sum, run) => sum + getRunDistanceKm(run), 0);
   const thisWeekDistance = getThisWeekDistance(runs);
   const lastWeekDistance = getLastWeekDistance(runs);
   const averagePaceSeconds = getAveragePaceSeconds(runs);
   const averagePace = formatPaceFromSeconds(averagePaceSeconds);
   const latestRun = runs[0] || null;
-
-  const prediction5k = getPredictedSecondsForDistance(runs, 5);
-  const prediction10k = getPredictedSecondsForDistance(runs, 10);
-  const predictionHalf = getPredictedSecondsForDistance(runs, 21.1);
-  const predictionMarathon = getPredictedSecondsForDistance(runs, 42.2);
-
-  const supportingRuns = getBestSupportingRuns(runs);
   const summary = getDashboardSummary(runs);
+
+  const candidates = useMemo(() => getPredictionCandidates(runs), [runs]);
+  const predictions = useMemo(() => {
+    const built = [
+      buildPrediction(runs, "5K", 5),
+      buildPrediction(runs, "10K", 10),
+      buildPrediction(runs, "Half Marathon", 21.1),
+      buildPrediction(runs, "Marathon", 42.2),
+    ].filter((item): item is RacePrediction => item !== null);
+
+    return built;
+  }, [runs]);
+
+  const topEvidence = candidates.slice(0, 4);
 
   return (
     <main
@@ -512,7 +874,7 @@ export default function HomePage() {
         <h1 style={{ margin: "10px 0 10px 0", fontSize: 38, lineHeight: 1.1 }}>
           Fitness, trends, and race predictions in one place
         </h1>
-        <p style={{ margin: 0, maxWidth: 700, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>
+        <p style={{ margin: 0, maxWidth: 760, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>
           {summary}
         </p>
       </div>
@@ -545,36 +907,23 @@ export default function HomePage() {
 
           <SectionCard
             title="Predicted Race Fitness"
-            rightText={supportingRuns.length > 0 ? `Based on ${supportingRuns.length} strong recent run${supportingRuns.length === 1 ? "" : "s"}` : ""}
+            rightText={candidates.length > 0 ? `Based on ${candidates.length} strongest recent run${candidates.length === 1 ? "" : "s"}` : ""}
           >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: 16,
-              }}
-            >
-              <PredictionCard
-                label="5K"
-                time={prediction5k ? secondsToTime(prediction5k) : "N/A"}
-                pace={prediction5k ? formatPaceFromSeconds(prediction5k / 5) : "Add more runs"}
-              />
-              <PredictionCard
-                label="10K"
-                time={prediction10k ? secondsToTime(prediction10k) : "N/A"}
-                pace={prediction10k ? formatPaceFromSeconds(prediction10k / 10) : "Add more runs"}
-              />
-              <PredictionCard
-                label="Half Marathon"
-                time={predictionHalf ? secondsToTime(predictionHalf) : "N/A"}
-                pace={predictionHalf ? formatPaceFromSeconds(predictionHalf / 21.1) : "Add more runs"}
-              />
-              <PredictionCard
-                label="Marathon"
-                time={predictionMarathon ? secondsToTime(predictionMarathon) : "N/A"}
-                pace={predictionMarathon ? formatPaceFromSeconds(predictionMarathon / 42.2) : "Add more runs"}
-              />
-            </div>
+            {predictions.length === 0 ? (
+              <p>Add more runs of at least 3 km to generate race predictions.</p>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                  gap: 16,
+                }}
+              >
+                {predictions.map((prediction) => (
+                  <PredictionCard key={prediction.race} prediction={prediction} />
+                ))}
+              </div>
+            )}
           </SectionCard>
 
           <div
@@ -622,11 +971,15 @@ export default function HomePage() {
                     </div>
                     <div>
                       <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Distance</p>
-                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.distance} km</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{getRunDistanceKm(latestRun).toFixed(2)} km</p>
                     </div>
                     <div>
                       <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Pace</p>
-                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{formatPace(latestRun.time, latestRun.distance)}</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                        {latestRun.movingTimeSeconds
+                          ? formatPaceFromSeconds(getRunPaceSeconds(latestRun))
+                          : formatPace(latestRun.time, latestRun.distance)}
+                      </p>
                     </div>
                     <div>
                       <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Time</p>
@@ -634,7 +987,9 @@ export default function HomePage() {
                     </div>
                     <div>
                       <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Avg HR</p>
-                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.avgHr || "N/A"}</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                        {latestRun.averageHeartrate || latestRun.avgHr || "N/A"}
+                      </p>
                     </div>
                   </div>
 
@@ -648,7 +1003,7 @@ export default function HomePage() {
                   >
                     <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Notes</p>
                     <p style={{ margin: "6px 0 0 0", color: "#111827" }}>
-                      {latestRun.notes || "No notes added for this run."}
+                      {latestRun.notes || latestRun.name || "No notes added for this run."}
                     </p>
                   </div>
                 </>
@@ -666,28 +1021,13 @@ export default function HomePage() {
               marginTop: 24,
             }}
           >
-            <SectionCard title="Prediction Evidence">
-              {supportingRuns.length === 0 ? (
+            <SectionCard title="Prediction Evidence" rightText={`${topEvidence.length} highlighted`}>
+              {topEvidence.length === 0 ? (
                 <p>Add a few runs of at least 3 km to power the prediction engine.</p>
               ) : (
                 <div style={{ display: "grid", gap: 12 }}>
-                  {supportingRuns.map((item) => (
-                    <div
-                      key={item.run.id}
-                      style={{
-                        padding: 14,
-                        borderRadius: 14,
-                        border: "1px solid #e5e7eb",
-                        background: "#f8fafc",
-                      }}
-                    >
-                      <p style={{ margin: 0, fontWeight: 700 }}>
-                        {item.run.date} · {item.run.distance} km in {item.run.time}
-                      </p>
-                      <p style={{ margin: "6px 0 0 0", color: "#4b5563" }}>
-                        {item.run.runType || "unknown"} · {formatPace(item.run.time, item.run.distance)} · HR {item.run.avgHr || "N/A"}
-                      </p>
-                    </div>
+                  {topEvidence.map((candidate) => (
+                    <CandidateCard key={candidate.run.id} candidate={candidate} />
                   ))}
                 </div>
               )}
