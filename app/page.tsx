@@ -149,7 +149,7 @@ function getBestSupportingRuns(runs: Run[]) {
       const bValue = b.pace / (1 + b.score * 0.05);
       return aValue - bValue;
     })
-    .slice(0, 3);
+    .slice(0, 8);
 }
 
 function getPredictedSecondsForDistance(runs: Run[], targetDistance: number) {
