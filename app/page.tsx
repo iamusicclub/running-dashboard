@@ -1,3 +1,5 @@
+Replace your entire app/page.tsx with this:
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -673,79 +675,6 @@ function buildWeeklyLoadBuckets(runs: Run[]) {
     .map(([, value]) => value);
 }
 
-function buildFitnessTrend(runs: Run[]) {
-  const validRuns = runs
-    .map((run) => {
-      const distance = getRunDistanceKm(run);
-      const time = getRunTimeSeconds(run);
-
-      if (distance < 3 || !time) return null;
-
-      const predicted5k = predictTime(distance, time, 5);
-
-      return {
-        date: run.date,
-        seconds: predicted5k,
-      };
-    })
-    .filter(Boolean) as { date: string; seconds: number }[];
-
-  return validRuns.sort((a, b) => a.date.localeCompare(b.date)).slice(-10);
-}
-
-function formatDateShort(date: string) {
-  const d = new Date(date);
-  return `${d.getDate()}/${d.getMonth() + 1}`;
-}
-
-function FitnessChart({ points }: { points: { date: string; seconds: number }[] }) {
-  if (points.length < 2) {
-    return <p>Not enough runs yet to calculate a trend.</p>;
-  }
-
-  const width = 600;
-  const height = 220;
-  const padding = 30;
-
-  const values = points.map((p) => p.seconds);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-
-  const xStep = (width - padding * 2) / (points.length - 1);
-
-  const yScale = (value: number) =>
-    height - padding - ((value - min) / (max - min || 1)) * (height - padding * 2);
-
-  const coords = points.map((p, i) => ({
-    x: padding + i * xStep,
-    y: yScale(p.seconds),
-    date: p.date,
-  }));
-
-  const path = coords.map((c, i) => `${i === 0 ? "M" : "L"} ${c.x} ${c.y}`).join(" ");
-
-  return (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
-      <path d={path} fill="none" stroke="#1d4ed8" strokeWidth="3" />
-
-      {coords.map((c, i) => (
-        <g key={i}>
-          <circle cx={c.x} cy={c.y} r="4" fill="#1d4ed8" />
-          <text
-            x={c.x}
-            y={height - 8}
-            fontSize="11"
-            textAnchor="middle"
-            fill="#444"
-          >
-            {formatDateShort(c.date)}
-          </text>
-        </g>
-      ))}
-    </svg>
-  );
-}
-
 function StatCard({
   label,
   value,
@@ -1021,7 +950,6 @@ export default function HomePage() {
 
   const weeklyBuckets = useMemo(() => buildWeeklyBuckets(runs), [runs]);
   const weeklyLoadBuckets = useMemo(() => buildWeeklyLoadBuckets(runs), [runs]);
-  const fitnessTrend = useMemo(() => buildFitnessTrend(runs), [runs]);
 
   const maxWeeklyDistance = Math.max(...weeklyBuckets.map((w) => w.totalDistance), 0);
 
@@ -1047,10 +975,6 @@ export default function HomePage() {
   }, [runs]);
 
   const topEvidence = candidates.slice(0, 4);
-  const latestEstimated5k =
-    fitnessTrend.length > 0
-      ? secondsToTime(fitnessTrend[fitnessTrend.length - 1].seconds)
-      : "N/A";
   const latestWeekLoad =
     weeklyLoadBuckets.length > 0
       ? `${weeklyLoadBuckets[weeklyLoadBuckets.length - 1].totalLoad.toFixed(0)}`
@@ -1107,11 +1031,6 @@ export default function HomePage() {
               subtext={averagePaceSeconds ? "Across all saved runs" : "Add more runs to calculate"}
             />
             <StatCard
-              label="Estimated 5K Fitness"
-              value={latestEstimated5k}
-              subtext="Based on recent run equivalents"
-            />
-            <StatCard
               label="Weekly Training Load"
               value={latestWeekLoad}
               subtext="Duration, run type, and HR weighted"
@@ -1146,15 +1065,6 @@ export default function HomePage() {
               gap: 16,
             }}
           >
-            <SectionCard title="Fitness Trend (Estimated 5K)">
-              <FitnessChart points={fitnessTrend} />
-              {fitnessTrend.length > 0 && (
-                <p style={{ marginTop: 12, color: "#555" }}>
-                  Latest estimated 5K fitness: <strong>{latestEstimated5k}</strong>
-                </p>
-              )}
-            </SectionCard>
-
             <SectionCard title="Latest Run">
               {latestRun ? (
                 <>
@@ -1216,6 +1126,13 @@ export default function HomePage() {
                 <p>No runs saved yet.</p>
               )}
             </SectionCard>
+
+            <SectionCard title="Weekly Training Load">
+              <p style={{ marginTop: 0, color: "#555" }}>
+                A simple load model based on run duration, run type, and heart rate.
+              </p>
+              <LoadBarChart buckets={weeklyLoadBuckets} />
+            </SectionCard>
           </div>
 
           <div
@@ -1241,21 +1158,6 @@ export default function HomePage() {
               )}
             </SectionCard>
 
-            <SectionCard title="Weekly Training Load">
-              <p style={{ marginTop: 0, color: "#555" }}>
-                A simple load model based on run duration, run type, and heart rate.
-              </p>
-              <LoadBarChart buckets={weeklyLoadBuckets} />
-            </SectionCard>
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-              gap: 16,
-            }}
-          >
             <SectionCard title="Prediction Evidence" rightText={`${topEvidence.length} highlighted`}>
               {topEvidence.length === 0 ? (
                 <p>Add a few runs of at least 3 km to power the prediction engine.</p>
@@ -1267,16 +1169,16 @@ export default function HomePage() {
                 </div>
               )}
             </SectionCard>
-
-            <SectionCard title="Quick Links">
-              <div style={{ display: "grid", gap: 12 }}>
-                <a href="/runs">Open Runs</a>
-                <a href="/predictions">Open Predictions</a>
-                <a href="/analysis">Open Training Analysis</a>
-                <a href="/races">Open Race Planner</a>
-              </div>
-            </SectionCard>
           </div>
+
+          <SectionCard title="Quick Links">
+            <div style={{ display: "grid", gap: 12 }}>
+              <a href="/runs">Open Runs</a>
+              <a href="/predictions">Open Predictions</a>
+              <a href="/analysis">Open Training Analysis</a>
+              <a href="/races">Open Race Planner</a>
+            </div>
+          </SectionCard>
         </>
       )}
     </main>
