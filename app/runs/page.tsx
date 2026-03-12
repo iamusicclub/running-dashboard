@@ -15,11 +15,11 @@ type Run = {
   elevation: string;
 };
 
-function calculatePace(time: string, distance: string) {
+function calculatePaceSeconds(time: string, distance: string) {
   const distanceNum = parseFloat(distance);
 
   if (!time || !distanceNum || distanceNum <= 0) {
-    return "N/A";
+    return null;
   }
 
   const parts = time.split(":").map(Number);
@@ -33,10 +33,19 @@ function calculatePace(time: string, distance: string) {
     const [hours, minutes, seconds] = parts;
     totalSeconds = hours * 3600 + minutes * 60 + seconds;
   } else {
+    return null;
+  }
+
+  return totalSeconds / distanceNum;
+}
+
+function calculatePace(time: string, distance: string) {
+  const paceSeconds = calculatePaceSeconds(time, distance);
+
+  if (!paceSeconds) {
     return "N/A";
   }
 
-  const paceSeconds = totalSeconds / distanceNum;
   const paceMinutesPart = Math.floor(paceSeconds / 60);
   const paceSecondsPart = Math.round(paceSeconds % 60);
 
@@ -44,6 +53,82 @@ function calculatePace(time: string, distance: string) {
     paceSecondsPart < 10 ? `0${paceSecondsPart}` : `${paceSecondsPart}`;
 
   return `${paceMinutesPart}:${formattedSeconds} /km`;
+}
+
+function analyseRun(run: Run) {
+  const paceSeconds = calculatePaceSeconds(run.time, run.distance);
+  const avgHr = parseFloat(run.avgHr || "0");
+  const distance = parseFloat(run.distance || "0");
+
+  if (!paceSeconds) {
+    return {
+      label: "No analysis available",
+      comment: "Time or distance format is incomplete.",
+    };
+  }
+
+  if (run.runType === "easy") {
+    if (avgHr > 0 && avgHr <= 150) {
+      return {
+        label: "Strong aerobic run",
+        comment: "Good control for an easy run. Effort looks sustainable.",
+      };
+    }
+
+    if (avgHr > 150) {
+      return {
+        label: "Too hard for easy day",
+        comment: "Heart rate looks a little high for an easy session.",
+      };
+    }
+  }
+
+  if (run.runType === "long") {
+    if (distance >= 16) {
+      return {
+        label: "Good long-run durability",
+        comment: "This run supports endurance development for longer races.",
+      };
+    }
+
+    return {
+      label: "Moderate endurance session",
+      comment: "Useful aerobic work, but not yet a major long-run stimulus.",
+    };
+  }
+
+  if (run.runType === "tempo") {
+    return {
+      label: "Quality threshold work",
+      comment: "This kind of run is strong for 10K and half marathon development.",
+    };
+  }
+
+  if (run.runType === "interval") {
+    return {
+      label: "Speed-focused session",
+      comment: "Useful for sharpening speed and improving top-end running economy.",
+    };
+  }
+
+  if (run.runType === "race") {
+    return {
+      label: "Race effort logged",
+      comment: "This run is especially useful for improving future race predictions.",
+    };
+  }
+
+  if (run.runType === "recovery") {
+    return {
+      label: "Recovery session",
+      comment: "Light training load. Good for absorbing harder sessions.",
+    };
+  }
+
+  return {
+    label: "Steady training run",
+    comment: "This run contributes general aerobic fitness and consistency.",
+  };
 }
 
 export default function RunsPage() {
@@ -198,28 +283,34 @@ export default function RunsPage() {
       <h2>Saved Runs</h2>
 
       <div style={{ display: "grid", gap: 16 }}>
-        {runs.map((run) => (
-          <div
-            key={run.id}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              padding: 16,
-            }}
-          >
-            <p><strong>Date:</strong> {run.date}</p>
-            <p><strong>Distance:</strong> {run.distance} km</p>
-            <p><strong>Time:</strong> {run.time}</p>
-            <p><strong>Pace:</strong> {calculatePace(run.time, run.distance)}</p>
-            <p><strong>Type:</strong> {run.runType}</p>
-            <p><strong>Average HR:</strong> {run.avgHr}</p>
-            <p><strong>Elevation:</strong> {run.elevation} m</p>
-            <p><strong>Notes:</strong> {run.notes}</p>
-          </div>
-        ))}
+        {runs.map((run) => {
+          const analysis = analyseRun(run);
+
+          return (
+            <div
+              key={run.id}
+              style={{
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                padding: 16,
+              }}
+            >
+              <p><strong>Date:</strong> {run.date}</p>
+              <p><strong>Distance:</strong> {run.distance} km</p>
+              <p><strong>Time:</strong> {run.time}</p>
+              <p><strong>Pace:</strong> {calculatePace(run.time, run.distance)}</p>
+              <p><strong>Type:</strong> {run.runType}</p>
+              <p><strong>Average HR:</strong> {run.avgHr}</p>
+              <p><strong>Elevation:</strong> {run.elevation} m</p>
+              <p><strong>Analysis:</strong> {analysis.label}</p>
+              <p><strong>Comment:</strong> {analysis.comment}</p>
+              <p><strong>Notes:</strong> {run.notes}</p>
+            </div>
+          );
+        })}
 
         {runs.length === 0 && <p>No runs saved yet.</p>}
       </div>
     </main>
   );
-}
+}_
