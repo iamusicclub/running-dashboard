@@ -16,8 +16,10 @@ type Run = {
 };
 
 type WeeklyBucket = {
+  key: string;
   label: string;
   totalDistance: number;
+  totalRuns: number;
 };
 
 function timeToSeconds(time: string) {
@@ -72,13 +74,14 @@ function formatPace(time: string, distance: string) {
     return "N/A";
   }
 
-  const minutes = Math.floor(paceSeconds / 60);
-  const seconds = Math.round(paceSeconds % 60);
-
-  return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds} /km`;
+  return formatPaceFromSeconds(paceSeconds);
 }
 
-function formatPaceFromSeconds(paceSeconds: number) {
+function formatPaceFromSeconds(paceSeconds: number | null) {
+  if (!paceSeconds) {
+    return "N/A";
+  }
+
   const minutes = Math.floor(paceSeconds / 60);
   const seconds = Math.round(paceSeconds % 60);
 
@@ -204,37 +207,35 @@ function buildWeeklyBuckets(runs: Run[]) {
 
     if (!map.has(key)) {
       map.set(key, {
+        key,
         label: formatWeekLabel(weekStart),
         totalDistance: 0,
+        totalRuns: 0,
       });
     }
 
     const bucket = map.get(key)!;
     bucket.totalDistance += distance;
+    bucket.totalRuns += 1;
   }
 
-  return Array.from(map.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-6)
-    .map((entry) => entry[1]);
+  return Array.from(map.values()).slice(-6);
 }
 
-function getAveragePace(runs: Run[]) {
+function getAveragePaceSeconds(runs: Run[]) {
   const paces = runs
     .map((run) => calculatePaceSeconds(run.time, run.distance))
     .filter((pace): pace is number => pace !== null);
 
   if (paces.length === 0) {
-    return "N/A";
+    return null;
   }
 
-  const avg = paces.reduce((sum, pace) => sum + pace, 0) / paces.length;
-  return formatPaceFromSeconds(avg);
+  return paces.reduce((sum, pace) => sum + pace, 0) / paces.length;
 }
 
 function getThisWeekDistance(runs: Run[]) {
-  const now = new Date();
-  const startOfWeek = getWeekStart(now);
+  const startOfWeek = getWeekStart(new Date());
 
   return runs.reduce((sum, run) => {
     const runDate = new Date(run.date);
@@ -248,45 +249,72 @@ function getThisWeekDistance(runs: Run[]) {
   }, 0);
 }
 
-function getTrainingSummary(runs: Run[]) {
+function getLastWeekDistance(runs: Run[]) {
+  const thisWeekStart = getWeekStart(new Date());
+  const lastWeekStart = new Date(thisWeekStart);
+  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+
+  return runs.reduce((sum, run) => {
+    const runDate = new Date(run.date);
+    const distance = parseFloat(run.distance || "0");
+
+    if (runDate >= lastWeekStart && runDate < thisWeekStart) {
+      return sum + distance;
+    }
+
+    return sum;
+  }, 0);
+}
+
+function getTrendLabel(current: number, previous: number, unit: string) {
+  if (previous === 0 && current > 0) {
+    return `Up from 0 ${unit}`;
+  }
+
+  if (current > previous * 1.05) {
+    return "Trending up";
+  }
+
+  if (current < previous * 0.95) {
+    return "Trending down";
+  }
+
+  return "Stable";
+}
+
+function getDashboardSummary(runs: Run[]) {
   if (runs.length === 0) {
-    return "Start by logging a few runs. Once there is more training history, the dashboard will begin to identify patterns and make stronger predictions.";
+    return "Start by logging a few runs or syncing Strava. Once there is more data, the dashboard will show clearer trends in volume, pace, and race readiness.";
   }
 
   const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
   const averageDistance = totalDistance / runs.length;
-  const easyRuns = runs.filter((run) => run.runType === "easy").length;
-  const qualityRuns = runs.filter(
-    (run) => run.runType === "tempo" || run.runType === "interval" || run.runType === "race"
-  ).length;
-  const longRuns = runs.filter((run) => run.runType === "long").length;
+  const longestRun = Math.max(...runs.map((run) => parseFloat(run.distance || "0")), 0);
+  const averagePace = formatPaceFromSeconds(getAveragePaceSeconds(runs));
+  const thisWeek = getThisWeekDistance(runs);
+  const lastWeek = getLastWeekDistance(runs);
 
-  let opening = `You have logged ${runs.length} runs covering ${totalDistance.toFixed(
+  let message = `You have logged ${runs.length} runs covering ${totalDistance.toFixed(
     1
-  )} km, with an average run distance of ${averageDistance.toFixed(1)} km.`;
+  )} km. Average run distance is ${averageDistance.toFixed(
+    1
+  )} km and average pace is ${averagePace}.`;
 
-  let distribution = "";
-  if (qualityRuns > easyRuns) {
-    distribution =
-      " Your training currently leans quite heavily toward harder efforts, so make sure easy mileage is still carrying enough of the load.";
-  } else if (easyRuns > 0 && qualityRuns > 0) {
-    distribution =
-      " Your training mix already includes both easier running and quality work, which is a good foundation for progression.";
+  if (thisWeek > lastWeek * 1.1 && lastWeek > 0) {
+    message += " Weekly volume is building compared with last week.";
+  } else if (thisWeek < lastWeek * 0.9 && lastWeek > 0) {
+    message += " Weekly volume is lighter than last week.";
   } else {
-    distribution =
-      " The training mix is still early, so the dashboard will become much more useful as more session types are added.";
+    message += " Weekly volume is fairly steady.";
   }
 
-  let endurance = "";
-  if (longRuns >= 2) {
-    endurance =
-      " You also have some meaningful endurance work logged, which helps support longer-distance predictions.";
+  if (longestRun >= 16) {
+    message += " You also have meaningful longer-run evidence in the dataset.";
   } else {
-    endurance =
-      " There is not much long-run evidence yet, so half marathon and marathon predictions should still be treated cautiously.";
+    message += " Longer-run evidence is still limited, so long-distance predictions should be treated cautiously.";
   }
 
-  return opening + distribution + endurance;
+  return message;
 }
 
 function StatCard({
@@ -303,45 +331,18 @@ function StatCard({
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
-        borderRadius: 16,
+        borderRadius: 18,
         padding: 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+        boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
       }}
     >
-      <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{label}</p>
-      <p style={{ margin: "8px 0 0 0", fontSize: 30, fontWeight: 700 }}>{value}</p>
-      {subtext && <p style={{ margin: "8px 0 0 0", fontSize: 13, color: "#6b7280" }}>{subtext}</p>}
-    </div>
-  );
-}
-
-function BarRow({
-  label,
-  value,
-  maxValue,
-}: {
-  label: string;
-  value: number;
-  maxValue: number;
-}) {
-  const width = maxValue > 0 ? `${(value / maxValue) * 100}%` : "0%";
-
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span>{label}</span>
-        <span>{value.toFixed(1)} km</span>
-      </div>
-      <div style={{ background: "#eef2f7", borderRadius: 999, height: 10 }}>
-        <div
-          style={{
-            width,
-            background: "#111827",
-            borderRadius: 999,
-            height: 10,
-          }}
-        />
-      </div>
+      <p style={{ margin: 0, fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        {label}
+      </p>
+      <p style={{ margin: "10px 0 6px 0", fontSize: 30, fontWeight: 700, color: "#111827" }}>
+        {value}
+      </p>
+      {subtext && <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>{subtext}</p>}
     </div>
   );
 }
@@ -360,14 +361,81 @@ function PredictionCard({
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
-        borderRadius: 16,
+        borderRadius: 18,
         padding: 18,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+        boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
       }}
     >
-      <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{label}</p>
-      <p style={{ margin: "8px 0 0 0", fontSize: 28, fontWeight: 700 }}>{time}</p>
-      <p style={{ margin: "8px 0 0 0", fontSize: 14, color: "#374151" }}>{pace}</p>
+      <p style={{ margin: 0, fontSize: 13, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        {label}
+      </p>
+      <p style={{ margin: "10px 0 4px 0", fontSize: 28, fontWeight: 700, color: "#111827" }}>
+        {time}
+      </p>
+      <p style={{ margin: 0, fontSize: 14, color: "#4b5563" }}>{pace}</p>
+    </div>
+  );
+}
+
+function MileageBar({
+  label,
+  value,
+  maxValue,
+  runs,
+}: {
+  label: string;
+  value: number;
+  maxValue: number;
+  runs: number;
+}) {
+  const width = maxValue > 0 ? `${(value / maxValue) * 100}%` : "0%";
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ color: "#374151" }}>{label}</span>
+        <span style={{ color: "#374151" }}>
+          {value.toFixed(1)} km · {runs} run{runs === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div style={{ background: "#e5e7eb", borderRadius: 999, height: 12 }}>
+        <div
+          style={{
+            width,
+            background: "linear-gradient(90deg, #111827, #374151)",
+            borderRadius: 999,
+            height: 12,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  children,
+  rightText,
+}: {
+  title: string;
+  children: React.ReactNode;
+  rightText?: string;
+}) {
+  return (
+    <div
+      style={{
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 18,
+        padding: 20,
+        boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+        <h2 style={{ margin: 0, fontSize: 22, color: "#111827" }}>{title}</h2>
+        {rightText && <span style={{ fontSize: 13, color: "#6b7280" }}>{rightText}</span>}
+      </div>
+      {children}
     </div>
   );
 }
@@ -380,15 +448,15 @@ export default function HomePage() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
     const snapshot = await getDocs(q);
 
-    const data: Run[] = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      date: doc.data().date || "",
-      distance: String(doc.data().distance || ""),
-      time: String(doc.data().time || ""),
-      notes: doc.data().notes || "",
-      runType: doc.data().runType || "",
-      avgHr: String(doc.data().avgHr || ""),
-      elevation: String(doc.data().elevation || ""),
+    const data: Run[] = snapshot.docs.map((docSnap) => ({
+      id: docSnap.id,
+      date: docSnap.data().date || "",
+      distance: String(docSnap.data().distance || ""),
+      time: String(docSnap.data().time || ""),
+      notes: docSnap.data().notes || "",
+      runType: docSnap.data().runType || "",
+      avgHr: String(docSnap.data().avgHr || ""),
+      elevation: String(docSnap.data().elevation || ""),
     }));
 
     setRuns(data);
@@ -405,14 +473,18 @@ export default function HomePage() {
   const totalRuns = runs.length;
   const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
   const thisWeekDistance = getThisWeekDistance(runs);
-  const averagePace = getAveragePace(runs);
+  const lastWeekDistance = getLastWeekDistance(runs);
+  const averagePaceSeconds = getAveragePaceSeconds(runs);
+  const averagePace = formatPaceFromSeconds(averagePaceSeconds);
   const latestRun = runs[0] || null;
-  const summary = getTrainingSummary(runs);
 
   const prediction5k = getPredictedSecondsForDistance(runs, 5);
   const prediction10k = getPredictedSecondsForDistance(runs, 10);
   const predictionHalf = getPredictedSecondsForDistance(runs, 21.1);
   const predictionMarathon = getPredictedSecondsForDistance(runs, 42.2);
+
+  const supportingRuns = getBestSupportingRuns(runs);
+  const summary = getDashboardSummary(runs);
 
   return (
     <main
@@ -420,15 +492,28 @@ export default function HomePage() {
         padding: 24,
         maxWidth: 1100,
         margin: "0 auto",
-        fontFamily: "Arial",
+        fontFamily: "Arial, sans-serif",
         background: "#f8fafc",
         minHeight: "100vh",
       }}
     >
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ marginBottom: 8, fontSize: 36 }}>Running Dashboard</h1>
-        <p style={{ margin: 0, color: "#4b5563", fontSize: 16 }}>
-          A clearer view of your training, fitness trend, and race readiness.
+      <div
+        style={{
+          marginBottom: 24,
+          padding: 24,
+          borderRadius: 22,
+          background: "linear-gradient(135deg, #111827, #1f2937)",
+          color: "white",
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", opacity: 0.75 }}>
+          Running Dashboard
+        </p>
+        <h1 style={{ margin: "10px 0 10px 0", fontSize: 38, lineHeight: 1.1 }}>
+          Fitness, trends, and race predictions in one place
+        </h1>
+        <p style={{ margin: 0, maxWidth: 700, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>
+          {summary}
         </p>
       </div>
 
@@ -444,28 +529,24 @@ export default function HomePage() {
               marginBottom: 24,
             }}
           >
-            <StatCard label="Total Runs" value={String(totalRuns)} />
-            <StatCard label="Total Distance" value={`${totalDistance.toFixed(1)} km`} />
-            <StatCard label="This Week" value={`${thisWeekDistance.toFixed(1)} km`} />
-            <StatCard label="Average Pace" value={averagePace} />
+            <StatCard label="Total Runs" value={String(totalRuns)} subtext="All logged activities" />
+            <StatCard label="Total Distance" value={`${totalDistance.toFixed(1)} km`} subtext="Cumulative training volume" />
+            <StatCard
+              label="This Week"
+              value={`${thisWeekDistance.toFixed(1)} km`}
+              subtext={getTrendLabel(thisWeekDistance, lastWeekDistance, "km")}
+            />
+            <StatCard
+              label="Average Pace"
+              value={averagePace}
+              subtext={averagePaceSeconds ? "Across all saved runs" : "Add more runs to calculate"}
+            />
           </div>
 
-          <div
-            style={{
-              background: "white",
-              border: "1px solid #e5e7eb",
-              borderRadius: 16,
-              padding: 20,
-              marginBottom: 24,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-            }}
+          <SectionCard
+            title="Predicted Race Fitness"
+            rightText={supportingRuns.length > 0 ? `Based on ${supportingRuns.length} strong recent run${supportingRuns.length === 1 ? "" : "s"}` : ""}
           >
-            <h2 style={{ marginTop: 0 }}>Training Summary</h2>
-            <p style={{ marginBottom: 0, lineHeight: 1.6 }}>{summary}</p>
-          </div>
-
-          <div style={{ marginBottom: 24 }}>
-            <h2 style={{ marginBottom: 16 }}>Predicted Race Fitness</h2>
             <div
               style={{
                 display: "grid",
@@ -494,6 +575,87 @@ export default function HomePage() {
                 pace={predictionMarathon ? formatPaceFromSeconds(predictionMarathon / 42.2) : "Add more runs"}
               />
             </div>
+          </SectionCard>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: 16,
+              marginTop: 24,
+            }}
+          >
+            <SectionCard title="Weekly Mileage">
+              {weeklyBuckets.length === 0 ? (
+                <p>No weekly training data yet.</p>
+              ) : (
+                weeklyBuckets.map((week) => (
+                  <MileageBar
+                    key={week.key}
+                    label={week.label}
+                    value={week.totalDistance}
+                    maxValue={maxWeeklyDistance}
+                    runs={week.totalRuns}
+                  />
+                ))
+              )}
+            </SectionCard>
+
+            <SectionCard title="Latest Run">
+              {latestRun ? (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 12,
+                      marginBottom: 14,
+                    }}
+                  >
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Date</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.date}</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Type</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.runType || "N/A"}</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Distance</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.distance} km</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Pace</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{formatPace(latestRun.time, latestRun.distance)}</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Time</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.time}</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Avg HR</p>
+                      <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{latestRun.avgHr || "N/A"}</p>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      background: "#f8fafc",
+                      border: "1px solid #e5e7eb",
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Notes</p>
+                    <p style={{ margin: "6px 0 0 0", color: "#111827" }}>
+                      {latestRun.notes || "No notes added for this run."}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p>No runs saved yet.</p>
+              )}
+            </SectionCard>
           </div>
 
           <div
@@ -501,77 +663,44 @@ export default function HomePage() {
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
               gap: 16,
-              marginBottom: 24,
+              marginTop: 24,
             }}
           >
-            <div
-              style={{
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 16,
-                padding: 20,
-                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-              }}
-            >
-              <h2 style={{ marginTop: 0 }}>Weekly Mileage</h2>
-              {weeklyBuckets.length === 0 ? (
-                <p>No weekly training data yet.</p>
+            <SectionCard title="Prediction Evidence">
+              {supportingRuns.length === 0 ? (
+                <p>Add a few runs of at least 3 km to power the prediction engine.</p>
               ) : (
-                weeklyBuckets.map((week) => (
-                  <BarRow
-                    key={week.label}
-                    label={week.label}
-                    value={week.totalDistance}
-                    maxValue={maxWeeklyDistance}
-                  />
-                ))
+                <div style={{ display: "grid", gap: 12 }}>
+                  {supportingRuns.map((item) => (
+                    <div
+                      key={item.run.id}
+                      style={{
+                        padding: 14,
+                        borderRadius: 14,
+                        border: "1px solid #e5e7eb",
+                        background: "#f8fafc",
+                      }}
+                    >
+                      <p style={{ margin: 0, fontWeight: 700 }}>
+                        {item.run.date} · {item.run.distance} km in {item.run.time}
+                      </p>
+                      <p style={{ margin: "6px 0 0 0", color: "#4b5563" }}>
+                        {item.run.runType || "unknown"} · {formatPace(item.run.time, item.run.distance)} · HR {item.run.avgHr || "N/A"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               )}
-            </div>
+            </SectionCard>
 
-            <div
-              style={{
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 16,
-                padding: 20,
-                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-              }}
-            >
-              <h2 style={{ marginTop: 0 }}>Latest Run</h2>
-
-              {latestRun ? (
-                <>
-                  <p><strong>Date:</strong> {latestRun.date}</p>
-                  <p><strong>Distance:</strong> {latestRun.distance} km</p>
-                  <p><strong>Time:</strong> {latestRun.time}</p>
-                  <p><strong>Pace:</strong> {formatPace(latestRun.time, latestRun.distance)}</p>
-                  <p><strong>Type:</strong> {latestRun.runType}</p>
-                  <p><strong>Average HR:</strong> {latestRun.avgHr}</p>
-                  <p><strong>Elevation:</strong> {latestRun.elevation} m</p>
-                  <p><strong>Notes:</strong> {latestRun.notes}</p>
-                </>
-              ) : (
-                <p>No runs saved yet.</p>
-              )}
-            </div>
-          </div>
-
-          <div
-            style={{
-              background: "white",
-              border: "1px solid #e5e7eb",
-              borderRadius: 16,
-              padding: 20,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>Quick Links</h2>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <a href="/runs">Runs</a>
-              <a href="/predictions">Predictions</a>
-              <a href="/analysis">Training Analysis</a>
-              <a href="/races">Race Planner</a>
-            </div>
+            <SectionCard title="Quick Links">
+              <div style={{ display: "grid", gap: 12 }}>
+                <a href="/runs">Open Runs</a>
+                <a href="/predictions">Open Predictions</a>
+                <a href="/analysis">Open Training Analysis</a>
+                <a href="/races">Open Race Planner</a>
+              </div>
+            </SectionCard>
           </div>
         </>
       )}
