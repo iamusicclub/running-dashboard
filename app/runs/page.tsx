@@ -55,10 +55,40 @@ function calculatePace(time: string, distance: string) {
   return `${paceMinutesPart}:${formattedSeconds} /km`;
 }
 
-function analyseRun(run: Run) {
+function calculateTrainingSignals(run: Run, allRuns: Run[]) {
+  const distance = parseFloat(run.distance || "0");
+  const hr = parseFloat(run.avgHr || "0");
+
+  const recentRuns = allRuns.slice(0, 5);
+
+  const avgDistance =
+    recentRuns.reduce((sum, r) => sum + parseFloat(r.distance || "0"), 0) /
+    (recentRuns.length || 1);
+
+  const avgHr =
+    recentRuns.reduce((sum, r) => sum + parseFloat(r.avgHr || "0"), 0) /
+    (recentRuns.length || 1);
+
+  const paceSeconds = calculatePaceSeconds(run.time, run.distance);
+
+  const avgPaceSeconds =
+    recentRuns.reduce((sum, r) => {
+      const p = calculatePaceSeconds(r.time, r.distance);
+      return sum + (p || 0);
+    }, 0) / (recentRuns.length || 1);
+
+  return {
+    longerThanAverage: distance > avgDistance * 1.2,
+    fasterThanAverage: !!paceSeconds && paceSeconds < avgPaceSeconds * 0.95,
+    highHeartRate: hr > avgHr * 1.05,
+  };
+}
+
+function analyseRun(run: Run, allRuns: Run[]) {
   const paceSeconds = calculatePaceSeconds(run.time, run.distance);
   const avgHr = parseFloat(run.avgHr || "0");
   const distance = parseFloat(run.distance || "0");
+  const signals = calculateTrainingSignals(run, allRuns);
 
   if (!paceSeconds) {
     return {
@@ -68,66 +98,121 @@ function analyseRun(run: Run) {
   }
 
   if (run.runType === "easy") {
-    if (avgHr > 0 && avgHr <= 150) {
+    if (signals.highHeartRate) {
       return {
-        label: "Strong aerobic run",
-        comment: "Good control for an easy run. Effort looks sustainable.",
+        label: "Easy run drifted hard",
+        comment:
+          "This looks tougher than your recent average. It may have added more fatigue than intended for an easy day.",
       };
     }
 
-    if (avgHr > 150) {
+    if (signals.fasterThanAverage) {
       return {
-        label: "Too hard for easy day",
-        comment: "Heart rate looks a little high for an easy session.",
+        label: "Fast aerobic day",
+        comment:
+          "You ran quicker than your recent average while keeping the session in an aerobic category. Good sign of improving fitness.",
       };
     }
+
+    if (avgHr > 0 && avgHr <= 150) {
+      return {
+        label: "Controlled aerobic run",
+        comment:
+          "Effort looks sustainable and well managed. This is the kind of run that supports consistency without much recovery cost.",
+      };
+    }
+
+    return {
+      label: "Steady easy mileage",
+      comment:
+        "A useful lower-intensity session that adds volume and supports aerobic development.",
+    };
   }
 
   if (run.runType === "long") {
+    if (signals.longerThanAverage && signals.highHeartRate) {
+      return {
+        label: "Big endurance stimulus",
+        comment:
+          "This was longer than your recent norm and likely came with a higher recovery cost. Strong endurance value, but monitor fatigue.",
+      };
+    }
+
     if (distance >= 16) {
       return {
-        label: "Good long-run durability",
-        comment: "This run supports endurance development for longer races.",
+        label: "Useful long-run durability",
+        comment:
+          "This run supports endurance development and is especially helpful for half marathon and marathon preparation.",
       };
     }
 
     return {
       label: "Moderate endurance session",
-      comment: "Useful aerobic work, but not yet a major long-run stimulus.",
+      comment:
+        "Useful aerobic work, though still below the level of a major long-run stimulus.",
     };
   }
 
   if (run.runType === "tempo") {
+    if (signals.fasterThanAverage) {
+      return {
+        label: "Strong threshold progression",
+        comment:
+          "This was quicker than your recent average and looks like a positive session for 10K and half marathon fitness.",
+      };
+    }
+
     return {
-      label: "Quality threshold work",
-      comment: "This kind of run is strong for 10K and half marathon development.",
-    };
+      label: "Threshold development",
+      comment:
+        "This kind of run is useful for improving sustained speed and lactate-threshold fitness.",
+      };
   }
 
   if (run.runType === "interval") {
+    if (signals.highHeartRate) {
+      return {
+        label: "Hard speed session",
+        comment:
+          "This looks like a demanding interval effort. Good for speed development, but likely carries a meaningful recovery cost.",
+      };
+    }
+
     return {
       label: "Speed-focused session",
-      comment: "Useful for sharpening speed and improving top-end running economy.",
-    };
+      comment:
+        "Useful for sharpening pace, top-end running economy, and shorter-distance fitness.",
+      };
   }
 
   if (run.runType === "race") {
     return {
-      label: "Race effort logged",
-      comment: "This run is especially useful for improving future race predictions.",
+      label: "Race-quality data point",
+      comment:
+        "This effort is especially valuable because it helps anchor future race predictions against a genuine hard effort.",
     };
   }
 
   if (run.runType === "recovery") {
+    if (signals.highHeartRate) {
+      return {
+        label: "Recovery run too costly",
+        comment:
+          "Heart rate was higher than your recent norm, so this may not have functioned as true recovery.",
+      };
+    }
+
     return {
-      label: "Recovery session",
-      comment: "Light training load. Good for absorbing harder sessions.",
+      label: "Low-stress recovery",
+      comment:
+        "A light session that should help you absorb harder training while maintaining consistency.",
     };
   }
 
   return {
-    label: "Steady training run",
-    comment: "This run contributes general aerobic fitness and consistency.",
+    label: "General aerobic training",
+    comment:
+      "This run contributes to overall consistency and aerobic fitness, even if it is not a key workout.",
   };
 }
 
@@ -284,7 +369,8 @@ export default function RunsPage() {
 
       <div style={{ display: "grid", gap: 16 }}>
         {runs.map((run) => {
-          const analysis = analyseRun(run);
+          const analysis = analyseRun(run, runs);
+          const signals = calculateTrainingSignals(run, runs);
 
           return (
             <div
@@ -304,6 +390,19 @@ export default function RunsPage() {
               <p><strong>Elevation:</strong> {run.elevation} m</p>
               <p><strong>Analysis:</strong> {analysis.label}</p>
               <p><strong>Comment:</strong> {analysis.comment}</p>
+
+              <div style={{ marginTop: 12 }}>
+                <p><strong>Training Signals:</strong></p>
+                <ul style={{ paddingLeft: 20, marginTop: 8 }}>
+                  {signals.longerThanAverage && <li>Longer than recent runs</li>}
+                  {signals.fasterThanAverage && <li>Faster than recent pace</li>}
+                  {signals.highHeartRate && <li>Higher heart rate than usual</li>}
+                  {!signals.longerThanAverage &&
+                    !signals.fasterThanAverage &&
+                    !signals.highHeartRate && <li>No major deviations from recent training</li>}
+                </ul>
+              </div>
+
               <p><strong>Notes:</strong> {run.notes}</p>
             </div>
           );
