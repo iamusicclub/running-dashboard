@@ -15,6 +15,14 @@ type Run = {
   elevation: string;
 };
 
+type WeeklyLoadBucket = {
+  key: string;
+  label: string;
+  totalDistance: number;
+  totalLoad: number;
+  totalRuns: number;
+};
+
 function timeToSeconds(time: string) {
   const parts = time.split(":").map(Number);
 
@@ -54,6 +62,81 @@ function getRunDistanceKm(run: Run) {
 
 function getRunTimeSeconds(run: Run) {
   return timeToSeconds(run.time || "") || 0;
+}
+
+function getWeekStart(date: Date) {
+  const copy = new Date(date);
+  const day = copy.getDay();
+  const diffToMonday = day === 0 ? 6 : day - 1;
+
+  copy.setDate(copy.getDate() - diffToMonday);
+  copy.setHours(0, 0, 0, 0);
+
+  return copy;
+}
+
+function formatWeekLabel(date: Date) {
+  const day = date.getDate();
+  const month = date.toLocaleString("en-GB", { month: "short" });
+  return `${day} ${month}`;
+}
+
+function getRunLoad(run: Run) {
+  const durationSeconds = getRunTimeSeconds(run);
+  const durationMinutes = durationSeconds / 60;
+  const avgHr = parseFloat(run.avgHr || "0");
+  const distanceKm = getRunDistanceKm(run);
+
+  if (!durationMinutes || !distanceKm) {
+    return 0;
+  }
+
+  let intensityFactor = 1;
+
+  if (run.runType === "recovery") intensityFactor = 0.75;
+  if (run.runType === "easy") intensityFactor = 1.0;
+  if (run.runType === "long") intensityFactor = 1.15;
+  if (run.runType === "tempo") intensityFactor = 1.35;
+  if (run.runType === "interval") intensityFactor = 1.45;
+  if (run.runType === "race") intensityFactor = 1.6;
+
+  if (avgHr >= 150) intensityFactor += 0.1;
+  if (avgHr >= 160) intensityFactor += 0.1;
+  if (avgHr >= 170) intensityFactor += 0.1;
+
+  return durationMinutes * intensityFactor;
+}
+
+function buildWeeklyLoadBuckets(runs: Run[]) {
+  const map = new Map<string, WeeklyLoadBucket>();
+
+  for (const run of runs) {
+    if (!run.date) continue;
+
+    const runDate = new Date(run.date);
+    const weekStart = getWeekStart(runDate);
+    const key = weekStart.toISOString().slice(0, 10);
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        label: formatWeekLabel(weekStart),
+        totalDistance: 0,
+        totalLoad: 0,
+        totalRuns: 0,
+      });
+    }
+
+    const bucket = map.get(key)!;
+    bucket.totalDistance += getRunDistanceKm(run);
+    bucket.totalLoad += getRunLoad(run);
+    bucket.totalRuns += 1;
+  }
+
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-8)
+    .map(([, value]) => value);
 }
 
 function buildFitnessTrend(runs: Run[]) {
@@ -114,12 +197,7 @@ function FitnessChart({ points }: { points: { date: string; seconds: number }[] 
 
   return (
     <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
-      <path
-        d={path}
-        fill="none"
-        stroke="#1d4ed8"
-        strokeWidth="3"
-      />
+      <path d={path} fill="none" stroke="#1d4ed8" strokeWidth="3" />
 
       {coords.map((c, i) => (
         <g key={i}>
@@ -142,9 +220,11 @@ function FitnessChart({ points }: { points: { date: string; seconds: number }[] 
 function StatCard({
   label,
   value,
+  subtext,
 }: {
   label: string;
   value: string;
+  subtext?: string;
 }) {
   return (
     <div
@@ -159,6 +239,59 @@ function StatCard({
       <p style={{ margin: "6px 0 0 0", fontSize: 28, fontWeight: 700 }}>
         {value}
       </p>
+      {subtext && <p style={{ margin: "8px 0 0 0", color: "#666", fontSize: 13 }}>{subtext}</p>}
+    </div>
+  );
+}
+
+function LoadBarChart({ buckets }: { buckets: WeeklyLoadBucket[] }) {
+  if (buckets.length === 0) {
+    return <p>No weekly load data yet.</p>;
+  }
+
+  const maxLoad = Math.max(...buckets.map((b) => b.totalLoad), 1);
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      {buckets.map((bucket) => {
+        const width = `${(bucket.totalLoad / maxLoad) * 100}%`;
+
+        return (
+          <div key={bucket.key}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: 6,
+                fontSize: 14,
+              }}
+            >
+              <span>{bucket.label}</span>
+              <span>
+                {bucket.totalLoad.toFixed(0)} load · {bucket.totalDistance.toFixed(1)} km
+              </span>
+            </div>
+
+            <div
+              style={{
+                height: 12,
+                borderRadius: 999,
+                background: "#dbeafe",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width,
+                  height: "100%",
+                  background: "linear-gradient(90deg, #1d4ed8, #2563eb)",
+                  borderRadius: 999,
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -190,14 +323,21 @@ export default function HomePage() {
     loadRuns();
   }, []);
 
-  const totalDistance = runs.reduce(
-    (sum, r) => sum + getRunDistanceKm(r),
-    0
-  );
-
+  const totalDistance = runs.reduce((sum, r) => sum + getRunDistanceKm(r), 0);
   const totalRuns = runs.length;
 
   const fitnessTrend = useMemo(() => buildFitnessTrend(runs), [runs]);
+  const weeklyLoadBuckets = useMemo(() => buildWeeklyLoadBuckets(runs), [runs]);
+
+  const latestEstimated5k =
+    fitnessTrend.length > 0
+      ? secondsToTime(fitnessTrend[fitnessTrend.length - 1].seconds)
+      : "N/A";
+
+  const latestWeekLoad =
+    weeklyLoadBuckets.length > 0
+      ? `${weeklyLoadBuckets[weeklyLoadBuckets.length - 1].totalLoad.toFixed(0)}`
+      : "0";
 
   if (loading) {
     return (
@@ -215,12 +355,18 @@ export default function HomePage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
+          gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
           gap: 16,
         }}
       >
         <StatCard label="Total Runs" value={String(totalRuns)} />
         <StatCard label="Total Distance" value={`${totalDistance.toFixed(1)} km`} />
+        <StatCard label="Latest Estimated 5K" value={latestEstimated5k} />
+        <StatCard
+          label="Latest Weekly Load"
+          value={latestWeekLoad}
+          subtext="Based on run duration, type, and heart rate"
+        />
       </div>
 
       <div
@@ -232,17 +378,29 @@ export default function HomePage() {
         }}
       >
         <h2 style={{ marginTop: 0 }}>Fitness Trend (Estimated 5K)</h2>
-
         <FitnessChart points={fitnessTrend} />
 
         {fitnessTrend.length > 0 && (
           <p style={{ marginTop: 12, color: "#555" }}>
-            Latest estimated 5K fitness:{" "}
-            <strong>
-              {secondsToTime(fitnessTrend[fitnessTrend.length - 1].seconds)}
-            </strong>
+            Latest estimated 5K fitness: <strong>{latestEstimated5k}</strong>
           </p>
         )}
+      </div>
+
+      <div
+        style={{
+          background: "white",
+          padding: 24,
+          borderRadius: 12,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Weekly Training Load</h2>
+        <p style={{ marginTop: 0, color: "#555" }}>
+          A simple load model based on run duration, run type, and heart rate.
+        </p>
+
+        <LoadBarChart buckets={weeklyLoadBuckets} />
       </div>
     </main>
   );
