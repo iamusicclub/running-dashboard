@@ -16,9 +16,11 @@ type Run = {
 };
 
 type WeeklyBucket = {
+  key: string;
   label: string;
   totalDistance: number;
   totalRuns: number;
+  averagePaceSeconds: number | null;
 };
 
 function timeToSeconds(time: string) {
@@ -82,7 +84,7 @@ function formatWeekLabel(date: Date) {
 }
 
 function buildWeeklyBuckets(runs: Run[]) {
-  const map = new Map<string, WeeklyBucket>();
+  const map = new Map<string, { label: string; runs: Run[] }>();
 
   for (const run of runs) {
     if (!run.date) continue;
@@ -90,25 +92,43 @@ function buildWeeklyBuckets(runs: Run[]) {
     const runDate = new Date(run.date);
     const weekStart = getWeekStart(runDate);
     const key = weekStart.toISOString().slice(0, 10);
-    const distance = parseFloat(run.distance || "0");
 
     if (!map.has(key)) {
       map.set(key, {
         label: formatWeekLabel(weekStart),
-        totalDistance: 0,
-        totalRuns: 0,
+        runs: [],
       });
     }
 
-    const bucket = map.get(key)!;
-    bucket.totalDistance += distance;
-    bucket.totalRuns += 1;
+    map.get(key)!.runs.push(run);
   }
 
   return Array.from(map.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
     .slice(-8)
-    .map((entry) => entry[1]);
+    .map(([key, value]) => {
+      const totalDistance = value.runs.reduce(
+        (sum, run) => sum + parseFloat(run.distance || "0"),
+        0
+      );
+
+      const paces = value.runs
+        .map((run) => calculatePaceSeconds(run.time, run.distance))
+        .filter((pace): pace is number => pace !== null);
+
+      const averagePaceSeconds =
+        paces.length > 0
+          ? paces.reduce((sum, pace) => sum + pace, 0) / paces.length
+          : null;
+
+      return {
+        key,
+        label: value.label,
+        totalDistance,
+        totalRuns: value.runs.length,
+        averagePaceSeconds,
+      };
+    });
 }
 
 function buildRunTypeMix(runs: Run[]) {
@@ -143,77 +163,202 @@ function getAverageHr(runs: Run[]) {
     .filter((hr) => hr > 0);
 
   if (valid.length === 0) {
-    return "N/A";
+    return null;
   }
 
-  const avg = valid.reduce((sum, hr) => sum + hr, 0) / valid.length;
-  return Math.round(avg).toString();
+  return valid.reduce((sum, hr) => sum + hr, 0) / valid.length;
 }
 
-function getAveragePace(runs: Run[]) {
+function getAveragePaceSeconds(runs: Run[]) {
   const paces = runs
     .map((run) => calculatePaceSeconds(run.time, run.distance))
     .filter((pace): pace is number => pace !== null);
 
   if (paces.length === 0) {
-    return "N/A";
+    return null;
   }
 
-  const avg = paces.reduce((sum, pace) => sum + pace, 0) / paces.length;
-  return formatPaceFromSeconds(avg);
+  return paces.reduce((sum, pace) => sum + pace, 0) / paces.length;
 }
 
 function getRecentTrend(runs: Run[]) {
-  const validRuns = runs.filter((run) => calculatePaceSeconds(run.time, run.distance) !== null);
+  const validRuns = runs.filter(
+    (run) => calculatePaceSeconds(run.time, run.distance) !== null
+  );
 
-  if (validRuns.length < 4) {
+  if (validRuns.length < 6) {
     return "Not enough data yet";
   }
 
   const recent = validRuns.slice(0, 3);
   const older = validRuns.slice(3, 6);
 
-  if (older.length === 0) {
-    return "Not enough data yet";
-  }
-
   const recentAvg =
-    recent.reduce((sum, run) => sum + (calculatePaceSeconds(run.time, run.distance) || 0), 0) /
-    recent.length;
+    recent.reduce(
+      (sum, run) => sum + (calculatePaceSeconds(run.time, run.distance) || 0),
+      0
+    ) / recent.length;
 
   const olderAvg =
-    older.reduce((sum, run) => sum + (calculatePaceSeconds(run.time, run.distance) || 0), 0) /
-    older.length;
+    older.reduce(
+      (sum, run) => sum + (calculatePaceSeconds(run.time, run.distance) || 0),
+      0
+    ) / older.length;
 
   if (recentAvg < olderAvg * 0.98) {
-    return "Pace trend improving";
+    return "Improving";
   }
 
   if (recentAvg > olderAvg * 1.02) {
-    return "Pace trend slowing slightly";
+    return "Slowing slightly";
   }
 
-  return "Pace trend stable";
+  return "Stable";
 }
 
-function getTrainingSummary(runs: Run[]) {
-  if (runs.length === 0) {
-    return "No runs saved yet, so there is not enough training data to analyse.";
+function getIntensityBalance(runTypeMix: { type: string; count: number }[]) {
+  const easyCount =
+    runTypeMix.find((item) => item.type === "easy")?.count || 0;
+  const recoveryCount =
+    runTypeMix.find((item) => item.type === "recovery")?.count || 0;
+  const hardCount =
+    (runTypeMix.find((item) => item.type === "tempo")?.count || 0) +
+    (runTypeMix.find((item) => item.type === "interval")?.count || 0) +
+    (runTypeMix.find((item) => item.type === "race")?.count || 0);
+
+  const easySide = easyCount + recoveryCount;
+
+  if (hardCount === 0 && easySide === 0) {
+    return "Unknown";
   }
 
-  const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
+  if (easySide >= hardCount * 2) {
+    return "Well controlled";
+  }
+
+  if (hardCount > easySide) {
+    return "Aggressive";
+  }
+
+  return "Reasonable";
+}
+
+function getLongestRun(runs: Run[]) {
+  if (runs.length === 0) {
+    return 0;
+  }
+
+  return Math.max(...runs.map((run) => parseFloat(run.distance || "0")), 0);
+}
+
+function buildCoachingSummary(runs: Run[], weeklyBuckets: WeeklyBucket[]) {
+  if (runs.length === 0) {
+    return {
+      headline: "No training data yet",
+      summary:
+        "Start by logging more runs. Once there is more history, the analysis will become much more specific and useful.",
+      positives: [],
+      watchouts: [],
+      recommendation:
+        "Add at least 5 to 8 runs across a mix of easy, long, and quality sessions.",
+    };
+  }
+
+  const totalDistance = runs.reduce(
+    (sum, run) => sum + parseFloat(run.distance || "0"),
+    0
+  );
   const averageDistance = totalDistance / runs.length;
   const averageHr = getAverageHr(runs);
+  const averagePaceSeconds = getAveragePaceSeconds(runs);
+  const runTypeMix = buildRunTypeMix(runs);
   const trend = getRecentTrend(runs);
-  const typeMix = buildRunTypeMix(runs);
+  const intensityBalance = getIntensityBalance(runTypeMix);
+  const longestRun = getLongestRun(runs);
 
-  const mostCommonType = typeMix.sort((a, b) => b.count - a.count)[0]?.type || "general";
+  const recentWeeks = weeklyBuckets.slice(-3);
+  const weeklyTrend =
+    recentWeeks.length >= 2
+      ? recentWeeks[recentWeeks.length - 1].totalDistance -
+        recentWeeks[0].totalDistance
+      : 0;
 
-  return `You have logged ${runs.length} runs covering ${totalDistance.toFixed(
+  const positives: string[] = [];
+  const watchouts: string[] = [];
+
+  if (trend === "Improving") {
+    positives.push("Recent pace trend is moving in the right direction.");
+  }
+
+  if (intensityBalance === "Well controlled") {
+    positives.push("Training distribution looks sustainable rather than overly hard.");
+  }
+
+  if (longestRun >= 16) {
+    positives.push("You have meaningful long-run evidence supporting endurance development.");
+  }
+
+  if (weeklyTrend > 5) {
+    positives.push("Your recent weekly volume appears to be building.");
+  }
+
+  if (trend === "Slowing slightly") {
+    watchouts.push("Recent pace trend has softened slightly versus earlier runs.");
+  }
+
+  if (intensityBalance === "Aggressive") {
+    watchouts.push("Your run mix leans quite hard, so recovery quality matters.");
+  }
+
+  if (longestRun < 12) {
+    watchouts.push("Longer-distance evidence is still limited for half marathon or marathon confidence.");
+  }
+
+  if (averageHr && averageHr > 160) {
+    watchouts.push("Average recorded heart rate is quite high, which may suggest many runs are being done too hard.");
+  }
+
+  if (weeklyTrend < -5) {
+    watchouts.push("Weekly volume has dropped recently, which may reduce momentum if the goal is progression.");
+  }
+
+  let headline = "Training foundation building";
+  if (trend === "Improving" && longestRun >= 16) {
+    headline = "Fitness trend encouraging";
+  } else if (trend === "Slowing slightly" && intensityBalance === "Aggressive") {
+    headline = "Watch recovery and training balance";
+  }
+
+  const summary = `You have logged ${runs.length} runs covering ${totalDistance.toFixed(
     1
-  )} km in total. Your average run distance is ${averageDistance.toFixed(
+  )} km, with an average run distance of ${averageDistance.toFixed(
     1
-  )} km, your average recorded heart rate is ${averageHr}, and your current pace trend is: ${trend}. Your most common session type is ${mostCommonType}, which gives a good early picture of how your training is currently distributed.`;
+  )} km. Average pace across logged runs is ${formatPaceFromSeconds(
+    averagePaceSeconds
+  )}, and the current pace trend is ${trend.toLowerCase()}. Your intensity balance looks ${intensityBalance.toLowerCase()}, and your longest logged run is ${longestRun.toFixed(
+    1
+  )} km.`;
+
+  let recommendation =
+    "Keep building consistency and add a broader mix of session types.";
+  if (trend === "Improving" && intensityBalance !== "Aggressive") {
+    recommendation =
+      "Stay consistent with the current structure and keep easy running doing most of the volume.";
+  } else if (intensityBalance === "Aggressive") {
+    recommendation =
+      "Protect recovery by adding more easy mileage or recovery sessions around harder workouts.";
+  } else if (longestRun < 12) {
+    recommendation =
+      "If longer races matter, start extending one weekly run to strengthen endurance evidence.";
+  }
+
+  return {
+    headline,
+    summary,
+    positives,
+    watchouts,
+    recommendation,
+  };
 }
 
 function BarRow({
@@ -238,16 +383,39 @@ function BarRow({
           {suffix}
         </span>
       </div>
-      <div style={{ background: "#eee", borderRadius: 999, height: 10 }}>
+      <div style={{ background: "#eef2f7", borderRadius: 999, height: 10 }}>
         <div
           style={{
             width,
-            background: "#222",
+            background: "#111827",
             borderRadius: 999,
             height: 10,
           }}
         />
       </div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 16,
+        padding: 20,
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+      }}
+    >
+      <h2 style={{ marginTop: 0 }}>{title}</h2>
+      {children}
     </div>
   );
 }
@@ -281,15 +449,26 @@ export default function AnalysisPage() {
 
   const weeklyBuckets = useMemo(() => buildWeeklyBuckets(runs), [runs]);
   const runTypeMix = useMemo(() => buildRunTypeMix(runs), [runs]);
+  const coachingSummary = useMemo(
+    () => buildCoachingSummary(runs, weeklyBuckets),
+    [runs, weeklyBuckets]
+  );
 
-  const totalDistance = runs.reduce((sum, run) => sum + parseFloat(run.distance || "0"), 0);
-  const totalElevation = runs.reduce((sum, run) => sum + parseFloat(run.elevation || "0"), 0);
+  const totalDistance = runs.reduce(
+    (sum, run) => sum + parseFloat(run.distance || "0"),
+    0
+  );
+  const totalElevation = runs.reduce(
+    (sum, run) => sum + parseFloat(run.elevation || "0"),
+    0
+  );
   const averageHr = getAverageHr(runs);
-  const averagePace = getAveragePace(runs);
-  const trend = getRecentTrend(runs);
-  const summary = getTrainingSummary(runs);
+  const averagePaceSeconds = getAveragePaceSeconds(runs);
 
-  const maxWeeklyDistance = Math.max(...weeklyBuckets.map((w) => w.totalDistance), 0);
+  const maxWeeklyDistance = Math.max(
+    ...weeklyBuckets.map((w) => w.totalDistance),
+    0
+  );
   const maxRunTypeCount = Math.max(...runTypeMix.map((r) => r.count), 0);
 
   if (loading) {
@@ -302,61 +481,100 @@ export default function AnalysisPage() {
   }
 
   return (
-    <main style={{ padding: 40, maxWidth: 1000, margin: "0 auto", fontFamily: "Arial" }}>
-      <h1>Training Analysis</h1>
-      <p>Overview of your training load, mix, and recent performance trend.</p>
+    <main
+      style={{
+        padding: 24,
+        maxWidth: 1100,
+        margin: "0 auto",
+        fontFamily: "Arial",
+        background: "#f8fafc",
+        minHeight: "100vh",
+      }}
+    >
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ marginBottom: 8, fontSize: 36 }}>Training Analysis</h1>
+        <p style={{ margin: 0, color: "#4b5563" }}>
+          A deeper view of your training load, structure, and current direction.
+        </p>
+      </div>
 
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
           gap: 16,
-          marginTop: 24,
-          marginBottom: 32,
+          marginBottom: 24,
         }}
       >
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <p><strong>Total Distance</strong></p>
-          <p style={{ fontSize: 28, margin: 0 }}>{totalDistance.toFixed(1)} km</p>
-        </div>
+        <SectionCard title="Total Distance">
+          <p style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>
+            {totalDistance.toFixed(1)} km
+          </p>
+        </SectionCard>
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <p><strong>Total Elevation</strong></p>
-          <p style={{ fontSize: 28, margin: 0 }}>{totalElevation.toFixed(0)} m</p>
-        </div>
+        <SectionCard title="Total Elevation">
+          <p style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>
+            {totalElevation.toFixed(0)} m
+          </p>
+        </SectionCard>
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <p><strong>Average HR</strong></p>
-          <p style={{ fontSize: 28, margin: 0 }}>{averageHr}</p>
-        </div>
+        <SectionCard title="Average HR">
+          <p style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>
+            {averageHr ? Math.round(averageHr) : "N/A"}
+          </p>
+        </SectionCard>
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <p><strong>Average Pace</strong></p>
-          <p style={{ fontSize: 28, margin: 0 }}>{averagePace}</p>
-        </div>
+        <SectionCard title="Average Pace">
+          <p style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>
+            {formatPaceFromSeconds(averagePaceSeconds)}
+          </p>
+        </SectionCard>
       </div>
 
-      <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 24 }}>
-        <h2 style={{ marginTop: 0 }}>Training Summary</h2>
-        <p>{summary}</p>
-        <p><strong>Current Trend:</strong> {trend}</p>
-      </div>
+      <SectionCard title={coachingSummary.headline}>
+        <p style={{ lineHeight: 1.6 }}>{coachingSummary.summary}</p>
+
+        {coachingSummary.positives.length > 0 && (
+          <>
+            <h3>What looks good</h3>
+            <ul>
+              {coachingSummary.positives.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {coachingSummary.watchouts.length > 0 && (
+          <>
+            <h3>What to watch</h3>
+            <ul>
+              {coachingSummary.watchouts.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        <h3>Recommendation</h3>
+        <p style={{ marginBottom: 0 }}>{coachingSummary.recommendation}</p>
+      </SectionCard>
 
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
           gap: 16,
+          marginTop: 24,
         }}
       >
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <h2 style={{ marginTop: 0 }}>Weekly Mileage</h2>
+        <SectionCard title="Weekly Mileage">
           {weeklyBuckets.length === 0 ? (
             <p>No weekly data yet.</p>
           ) : (
             weeklyBuckets.map((week) => (
               <BarRow
-                key={week.label}
+                key={week.key}
                 label={week.label}
                 value={Number(week.totalDistance.toFixed(1))}
                 maxValue={maxWeeklyDistance}
@@ -364,10 +582,9 @@ export default function AnalysisPage() {
               />
             ))
           )}
-        </div>
+        </SectionCard>
 
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <h2 style={{ marginTop: 0 }}>Run Type Mix</h2>
+        <SectionCard title="Run Type Mix">
           {runTypeMix.length === 0 ? (
             <p>No run type data yet.</p>
           ) : (
@@ -380,17 +597,18 @@ export default function AnalysisPage() {
               />
             ))
           )}
-        </div>
+        </SectionCard>
       </div>
 
-      <div style={{ marginTop: 32 }}>
-        <h2>Quick Links</h2>
-        <ul>
-          <li><a href="/">Dashboard</a></li>
-          <li><a href="/runs">Runs</a></li>
-          <li><a href="/predictions">Predictions</a></li>
-          <li><a href="/races">Race Planner</a></li>
-        </ul>
+      <div style={{ marginTop: 24 }}>
+        <SectionCard title="Quick Links">
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <a href="/">Dashboard</a>
+            <a href="/runs">Runs</a>
+            <a href="/predictions">Predictions</a>
+            <a href="/races">Race Planner</a>
+          </div>
+        </SectionCard>
       </div>
     </main>
   );
