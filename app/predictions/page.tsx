@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 
@@ -13,6 +13,16 @@ type Run = {
   runType: string;
   avgHr: string;
   elevation: string;
+};
+
+type RacePrediction = {
+  race: string;
+  distance: number;
+  predictedSeconds: number;
+  predictedTime: string;
+  targetPace: string;
+  confidence: string;
+  reason: string;
 };
 
 function timeToSeconds(time: string) {
@@ -33,7 +43,6 @@ function timeToSeconds(time: string) {
 
 function secondsToTime(totalSeconds: number) {
   const rounded = Math.round(totalSeconds);
-
   const hours = Math.floor(rounded / 3600);
   const minutes = Math.floor((rounded % 3600) / 60);
   const seconds = rounded % 60;
@@ -47,7 +56,6 @@ function secondsToTime(totalSeconds: number) {
 
 function formatPace(totalSeconds: number, distanceKm: number) {
   const paceSeconds = totalSeconds / distanceKm;
-
   const minutes = Math.floor(paceSeconds / 60);
   const seconds = Math.round(paceSeconds % 60);
 
@@ -58,26 +66,154 @@ function predictTime(baseDistance: number, baseTime: number, targetDistance: num
   return baseTime * Math.pow(targetDistance / baseDistance, 1.06);
 }
 
-function getBestPredictionRun(runs: Run[]) {
-  let bestRun: Run | null = null;
-  let bestPace: number | null = null;
+function getRunQualityScore(run: Run) {
+  const distance = parseFloat(run.distance || "0");
+  const seconds = timeToSeconds(run.time);
+  const avgHr = parseFloat(run.avgHr || "0");
 
-  for (const run of runs) {
-    const distance = parseFloat(run.distance || "0");
-    const seconds = timeToSeconds(run.time);
+  if (!distance || !seconds) return 0;
+  if (distance < 3) return 0;
 
-    if (!distance || !seconds) continue;
-    if (distance < 3) continue;
+  let score = 0;
 
-    const pace = seconds / distance;
+  if (run.runType === "race") score += 5;
+  if (run.runType === "tempo") score += 4;
+  if (run.runType === "interval") score += 3;
+  if (run.runType === "long") score += 2;
+  if (run.runType === "easy") score += 1;
+  if (run.runType === "recovery") score += 0.5;
 
-    if (bestPace === null || pace < bestPace) {
-      bestPace = pace;
-      bestRun = run;
-    }
+  if (distance >= 5) score += 1;
+  if (distance >= 10) score += 1;
+  if (distance >= 16) score += 1;
+
+  if (avgHr >= 150) score += 1;
+
+  return score;
+}
+
+function getRecentRuns(runs: Run[]) {
+  return [...runs]
+    .filter((run) => {
+      const distance = parseFloat(run.distance || "0");
+      const seconds = timeToSeconds(run.time);
+      return distance >= 3 && !!seconds;
+    })
+    .slice(0, 8);
+}
+
+function getBestSupportingRuns(runs: Run[]) {
+  return getRecentRuns(runs)
+    .map((run) => {
+      const distance = parseFloat(run.distance || "0");
+      const seconds = timeToSeconds(run.time)!;
+      const pace = seconds / distance;
+      const score = getRunQualityScore(run);
+
+      return {
+        run,
+        distance,
+        seconds,
+        pace,
+        score,
+      };
+    })
+    .sort((a, b) => {
+      const aValue = a.pace / (1 + a.score * 0.05);
+      const bValue = b.pace / (1 + b.score * 0.05);
+      return aValue - bValue;
+    })
+    .slice(0, 3);
+}
+
+function getConfidenceLabel(runCount: number, targetDistance: number, baseDistances: number[]) {
+  const maxBase = Math.max(...baseDistances);
+
+  if (runCount >= 3 && targetDistance <= 10) {
+    return "High";
   }
 
-  return bestRun;
+  if (runCount >= 3 && targetDistance <= 21.1 && maxBase >= 10) {
+    return "Moderate";
+  }
+
+  if (runCount >= 2 && targetDistance <= 10) {
+    return "Moderate";
+  }
+
+  if (targetDistance === 42.2 && maxBase < 16) {
+    return "Low";
+  }
+
+  if (targetDistance === 21.1 && maxBase < 8) {
+    return "Low";
+  }
+
+  return "Low";
+}
+
+function getConfidenceReason(confidence: string, targetDistance: number, baseDistances: number[]) {
+  const maxBase = Math.max(...baseDistances);
+
+  if (confidence === "High") {
+    return "Based on multiple strong recent runs close enough in intensity to support this estimate.";
+  }
+
+  if (confidence === "Moderate") {
+    if (targetDistance > maxBase) {
+      return "Prediction is being projected from shorter efforts, so it is useful but still somewhat speculative.";
+    }
+
+    return "Supported by a few relevant recent runs, but still sensitive to training consistency.";
+  }
+
+  if (targetDistance === 42.2) {
+    return "Marathon prediction is low-confidence because your recent data does not yet include enough long endurance work.";
+  }
+
+  return "Prediction is based on limited or indirect evidence, so treat it as a rough guide.";
+}
+
+function buildPredictions(runs: Run[]): RacePrediction[] {
+  const supportingRuns = getBestSupportingRuns(runs);
+
+  if (supportingRuns.length === 0) {
+    return [];
+  }
+
+  const baseDistances = supportingRuns.map((item) => item.distance);
+
+  const races = [
+    { race: "5K", distance: 5 },
+    { race: "10K", distance: 10 },
+    { race: "Half Marathon", distance: 21.1 },
+    { race: "Marathon", distance: 42.2 },
+  ];
+
+  return races.map((race) => {
+    const weightedPredictions = supportingRuns.map((item) => {
+      const predicted = predictTime(item.distance, item.seconds, race.distance);
+      const weight = item.score + 1;
+      return { predicted, weight };
+    });
+
+    const weightedSum = weightedPredictions.reduce((sum, item) => sum + item.predicted * item.weight, 0);
+    const totalWeight = weightedPredictions.reduce((sum, item) => sum + item.weight, 0);
+
+    const predictedSeconds = weightedSum / totalWeight;
+    const confidence = getConfidenceLabel(supportingRuns.length, race.distance, baseDistances);
+    const reason = getConfidenceReason(confidence, race.distance, baseDistances);
+
+    return {
+      race: race.race,
+      distance: race.distance,
+      predictedSeconds,
+      predictedTime: secondsToTime(predictedSeconds),
+      targetPace: formatPace(predictedSeconds, race.distance),
+      confidence,
+      reason,
+    };
+  });
 }
 
 export default function PredictionsPage() {
@@ -107,7 +243,8 @@ export default function PredictionsPage() {
     loadRuns();
   }, []);
 
-  const bestRun = getBestPredictionRun(runs);
+  const supportingRuns = useMemo(() => getBestSupportingRuns(runs), [runs]);
+  const predictions = useMemo(() => buildPredictions(runs), [runs]);
 
   if (loading) {
     return (
@@ -118,63 +255,54 @@ export default function PredictionsPage() {
     );
   }
 
-  if (!bestRun) {
+  if (predictions.length === 0) {
     return (
       <main style={{ padding: 40 }}>
         <h1>Predictions</h1>
-        <p>Add some runs of at least 3 km to generate predictions.</p>
+        <p>Add a few runs of at least 3 km to generate smarter predictions.</p>
       </main>
     );
   }
 
-  const baseDistance = parseFloat(bestRun.distance);
-  const baseTime = timeToSeconds(bestRun.time)!;
-
-  const predictions = [
-    { name: "5K", distance: 5 },
-    { name: "10K", distance: 10 },
-    { name: "Half Marathon", distance: 21.1 },
-    { name: "Marathon", distance: 42.2 },
-  ].map((race) => {
-    const predictedSeconds = predictTime(baseDistance, baseTime, race.distance);
-
-    return {
-      race: race.name,
-      time: secondsToTime(predictedSeconds),
-      pace: formatPace(predictedSeconds, race.distance),
-    };
-  });
-
   return (
-    <main style={{ padding: 40, maxWidth: 900, margin: "0 auto", fontFamily: "Arial" }}>
+    <main style={{ padding: 40, maxWidth: 950, margin: "0 auto", fontFamily: "Arial" }}>
       <h1>Race Predictions</h1>
-
       <p>
-        Predictions are based on your strongest recent run:
+        These predictions use a weighted blend of your strongest recent runs rather than only one single effort.
       </p>
 
       <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 30 }}>
-        <p><strong>Date:</strong> {bestRun.date}</p>
-        <p><strong>Distance:</strong> {bestRun.distance} km</p>
-        <p><strong>Time:</strong> {bestRun.time}</p>
-        <p><strong>Run Type:</strong> {bestRun.runType}</p>
+        <h2 style={{ marginTop: 0 }}>Runs Used For Prediction</h2>
+        <div style={{ display: "grid", gap: 12 }}>
+          {supportingRuns.map((item) => (
+            <div key={item.run.id} style={{ padding: 12, border: "1px solid #eee", borderRadius: 8 }}>
+              <p><strong>Date:</strong> {item.run.date}</p>
+              <p><strong>Distance:</strong> {item.run.distance} km</p>
+              <p><strong>Time:</strong> {item.run.time}</p>
+              <p><strong>Type:</strong> {item.run.runType}</p>
+              <p><strong>Average HR:</strong> {item.run.avgHr}</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <h2>Predicted Race Fitness</h2>
 
       <div style={{ display: "grid", gap: 16 }}>
-        {predictions.map((p) => (
+        {predictions.map((prediction) => (
           <div
-            key={p.race}
+            key={prediction.race}
             style={{
               border: "1px solid #ddd",
               borderRadius: 8,
               padding: 16,
             }}
           >
-            <h3 style={{ marginTop: 0 }}>{p.race}</h3>
-            <p><strong>Predicted Time:</strong> {p.time}</p>
-            <p><strong>Target Pace:</strong> {p.pace}</p>
+            <h3 style={{ marginTop: 0 }}>{prediction.race}</h3>
+            <p><strong>Predicted Time:</strong> {prediction.predictedTime}</p>
+            <p><strong>Target Pace:</strong> {prediction.targetPace}</p>
+            <p><strong>Confidence:</strong> {prediction.confidence}</p>
+            <p><strong>Why:</strong> {prediction.reason}</p>
           </div>
         ))}
       </div>
