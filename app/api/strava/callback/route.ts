@@ -67,5 +67,7 @@ export async function GET(req: NextRequest) {
     { merge: true }
   );
 
-  return NextResponse.redirect(new URL(`/runs?strava=connected&athlete=${athleteId}`, req.url));
+  return NextResponse.redirect(
+    new URL(`/runs?strava=connected&athlete=${athleteId}`, req.url)
+  );
 }
