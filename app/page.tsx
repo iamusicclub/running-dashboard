@@ -1,4 +1,3 @@
-Replace your entire app/page.tsx with this:
 
 "use client";
 
