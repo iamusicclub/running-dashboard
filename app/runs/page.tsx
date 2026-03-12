@@ -248,6 +248,8 @@ export default function RunsPage() {
   const [aiError, setAiError] = useState("");
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMessage, setBackfillMessage] = useState("");
+  const [syncingStrava, setSyncingStrava] = useState(false);
+  const [stravaMessage, setStravaMessage] = useState("");
 
   async function loadRuns() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
@@ -380,11 +382,92 @@ export default function RunsPage() {
     }
   }
 
+  async function handleStravaSync() {
+    const params = new URLSearchParams(window.location.search);
+    const athleteId = params.get("athlete");
+
+    if (!athleteId) {
+      setStravaMessage("Connect Strava first.");
+      return;
+    }
+
+    setSyncingStrava(true);
+    setStravaMessage("");
+
+    try {
+      const response = await fetch("/api/strava/sync", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ athleteId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Failed to sync Strava.");
+      }
+
+      setStravaMessage(`Imported ${data.imported} run${data.imported === 1 ? "" : "s"} from Strava.`);
+      await loadRuns();
+    } catch (err: any) {
+      setStravaMessage(err.message || "Failed to sync Strava.");
+    } finally {
+      setSyncingStrava(false);
+    }
+  }
+
   const missingAnalysisCount = runs.filter((run) => !run.aiAnalysis).length;
 
   return (
     <main style={{ padding: 40, maxWidth: 900, margin: "0 auto" }}>
       <h1>Runs</h1>
+
+      <div
+        style={{
+          marginBottom: 24,
+          padding: 16,
+          borderRadius: 12,
+          border: "1px solid #ddd",
+          background: "#f8fafc",
+        }}
+      >
+        <p style={{ marginTop: 0 }}>
+          <strong>Strava Import</strong>
+        </p>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <a
+            href="/api/strava/connect"
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              border: "1px solid #ddd",
+              background: "white",
+              textDecoration: "none",
+              color: "black",
+            }}
+          >
+            Connect Strava
+          </a>
+
+          <button
+            onClick={handleStravaSync}
+            disabled={syncingStrava}
+            type="button"
+            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+          >
+            {syncingStrava ? "Syncing Strava..." : "Sync From Strava"}
+          </button>
+        </div>
+
+        {stravaMessage && (
+          <p style={{ marginBottom: 0, marginTop: 12 }}>
+            {stravaMessage}
+          </p>
+        )}
+      </div>
 
       <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 32 }}>
         <input
