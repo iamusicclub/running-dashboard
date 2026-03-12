@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { addDoc, collection, getDocs, orderBy, query } from "firebase/firestore";
-import { db } from "../../lib/firebase";
+import { db } from "../lib/firebase";
 
 type Run = {
   id: string;
