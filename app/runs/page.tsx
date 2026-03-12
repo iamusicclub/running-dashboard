@@ -1,8 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { addDoc, collection, getDocs, orderBy, query } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  updateDoc,
+} from "firebase/firestore";
 import { db } from "../../lib/firebase";
+
+type AiRunAnalysis = {
+  headline: string;
+  summary: string;
+  what_went_well: string[];
+  watchouts: string[];
+  impact_on_training: string;
+  next_step: string;
+};
 
 type Run = {
   id: string;
@@ -13,15 +30,7 @@ type Run = {
   runType: string;
   avgHr: string;
   elevation: string;
-};
-
-type AiRunAnalysis = {
-  headline: string;
-  summary: string;
-  what_went_well: string[];
-  watchouts: string[];
-  impact_on_training: string;
-  next_step: string;
+  aiAnalysis?: AiRunAnalysis | null;
 };
 
 function calculatePaceSeconds(time: string, distance: string) {
@@ -175,8 +184,8 @@ function analyseRun(run: Run, allRuns: Run[]) {
       label: "Threshold development",
       comment:
         "This kind of run is useful for improving sustained speed and lactate-threshold fitness.",
-    };
-  }
+      };
+    }
 
   if (run.runType === "interval") {
     if (signals.highHeartRate) {
@@ -191,7 +200,7 @@ function analyseRun(run: Run, allRuns: Run[]) {
       label: "Speed-focused session",
       comment:
         "Useful for sharpening pace, top-end running economy, and shorter-distance fitness.",
-      };
+    };
   }
 
   if (run.runType === "race") {
@@ -236,23 +245,22 @@ export default function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [aiError, setAiError] = useState("");
-  const [aiResults, setAiResults] = useState<Record<string, AiRunAnalysis>>({});
 
   async function loadRuns() {
     const q = query(collection(db, "runs"), orderBy("date", "desc"));
     const snapshot = await getDocs(q);
 
-    const data: Run[] = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      date: doc.data().date || "",
-      distance: String(doc.data().distance || ""),
-      time: String(doc.data().time || ""),
-      notes: doc.data().notes || "",
-      runType: doc.data().runType || "",
-      avgHr: String(doc.data().avgHr || ""),
-      elevation: String(doc.data().elevation || ""),
+    const data: Run[] = snapshot.docs.map((docSnap) => ({
+      id: docSnap.id,
+      date: docSnap.data().date || "",
+      distance: String(docSnap.data().distance || ""),
+      time: String(docSnap.data().time || ""),
+      notes: docSnap.data().notes || "",
+      runType: docSnap.data().runType || "",
+      avgHr: String(docSnap.data().avgHr || ""),
+      elevation: String(docSnap.data().elevation || ""),
+      aiAnalysis: docSnap.data().aiAnalysis || null,
     }));
 
     setRuns(data);
@@ -262,13 +270,37 @@ export default function RunsPage() {
     loadRuns();
   }, []);
 
+  async function generateAndStoreAiAnalysis(run: Run, allRuns: Run[]) {
+    const response = await fetch("/api/run-analysis", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        run,
+        allRuns,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data?.error || "Failed to generate AI run analysis.");
+    }
+
+    await updateDoc(doc(db, "runs", run.id), {
+      aiAnalysis: data,
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError("");
+    setAiError("");
 
     try {
-      await addDoc(collection(db, "runs"), {
+      const docRef = await addDoc(collection(db, "runs"), {
         date,
         distance,
         time,
@@ -278,6 +310,26 @@ export default function RunsPage() {
         elevation,
         createdAt: new Date().toISOString(),
       });
+
+      const newRun: Run = {
+        id: docRef.id,
+        date,
+        distance,
+        time,
+        notes,
+        runType,
+        avgHr,
+        elevation,
+        aiAnalysis: null,
+      };
+
+      const allRunsForAnalysis = [newRun, ...runs];
+
+      try {
+        await generateAndStoreAiAnalysis(newRun, allRunsForAnalysis);
+      } catch (err: any) {
+        setAiError(err.message || "Run saved, but AI analysis could not be generated.");
+      }
 
       setDate("");
       setDistance("");
@@ -292,39 +344,6 @@ export default function RunsPage() {
       setError(err.message || "Something went wrong while saving.");
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function generateAiAnalysis(run: Run) {
-    setAiLoadingId(run.id);
-    setAiError("");
-
-    try {
-      const response = await fetch("/api/run-analysis", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          run,
-          allRuns: runs,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Failed to generate AI run analysis.");
-      }
-
-      setAiResults((prev) => ({
-        ...prev,
-        [run.id]: data,
-      }));
-    } catch (err: any) {
-      setAiError(err.message || "Failed to generate AI run analysis.");
-    } finally {
-      setAiLoadingId(null);
     }
   }
 
@@ -400,7 +419,7 @@ export default function RunsPage() {
         />
 
         <button type="submit" disabled={saving} style={{ padding: 12 }}>
-          {saving ? "Saving..." : "Save Run"}
+          {saving ? "Saving run and generating AI analysis..." : "Save Run"}
         </button>
       </form>
 
@@ -411,7 +430,7 @@ export default function RunsPage() {
       )}
 
       {aiError && (
-        <p style={{ color: "red", marginBottom: 16 }}>
+        <p style={{ color: "darkorange", marginBottom: 16 }}>
           {aiError}
         </p>
       )}
@@ -422,7 +441,6 @@ export default function RunsPage() {
         {runs.map((run) => {
           const analysis = analyseRun(run, runs);
           const signals = calculateTrainingSignals(run, runs);
-          const aiAnalysis = aiResults[run.id];
 
           return (
             <div
@@ -441,8 +459,8 @@ export default function RunsPage() {
               <p><strong>Type:</strong> {run.runType}</p>
               <p><strong>Average HR:</strong> {run.avgHr}</p>
               <p><strong>Elevation:</strong> {run.elevation} m</p>
-              <p><strong>Analysis:</strong> {analysis.label}</p>
-              <p><strong>Comment:</strong> {analysis.comment}</p>
+              <p><strong>Rule-based Analysis:</strong> {analysis.label}</p>
+              <p><strong>Rule-based Comment:</strong> {analysis.comment}</p>
 
               <div style={{ marginTop: 12 }}>
                 <p><strong>Training Signals:</strong></p>
@@ -458,17 +476,7 @@ export default function RunsPage() {
 
               <p><strong>Notes:</strong> {run.notes}</p>
 
-              <div style={{ marginTop: 16 }}>
-                <button
-                  onClick={() => generateAiAnalysis(run)}
-                  disabled={aiLoadingId === run.id}
-                  style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-                >
-                  {aiLoadingId === run.id ? "Generating AI analysis..." : "Generate AI Run Analysis"}
-                </button>
-              </div>
-
-              {aiAnalysis && (
+              {run.aiAnalysis ? (
                 <div
                   style={{
                     marginTop: 16,
@@ -478,33 +486,47 @@ export default function RunsPage() {
                     border: "1px solid #e5e7eb",
                   }}
                 >
-                  <h3 style={{ marginTop: 0 }}>{aiAnalysis.headline}</h3>
-                  <p>{aiAnalysis.summary}</p>
+                  <h3 style={{ marginTop: 0 }}>{run.aiAnalysis.headline}</h3>
+                  <p>{run.aiAnalysis.summary}</p>
 
-                  {aiAnalysis.what_went_well.length > 0 && (
+                  {run.aiAnalysis.what_went_well.length > 0 && (
                     <>
                       <p><strong>What went well</strong></p>
                       <ul>
-                        {aiAnalysis.what_went_well.map((item) => (
+                        {run.aiAnalysis.what_went_well.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>
                     </>
                   )}
 
-                  {aiAnalysis.watchouts.length > 0 && (
+                  {run.aiAnalysis.watchouts.length > 0 && (
                     <>
                       <p><strong>What to watch</strong></p>
                       <ul>
-                        {aiAnalysis.watchouts.map((item) => (
+                        {run.aiAnalysis.watchouts.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>
                     </>
                   )}
 
-                  <p><strong>Impact on training:</strong> {aiAnalysis.impact_on_training}</p>
-                  <p><strong>Next step:</strong> {aiAnalysis.next_step}</p>
+                  <p><strong>Impact on training:</strong> {run.aiAnalysis.impact_on_training}</p>
+                  <p><strong>Next step:</strong> {run.aiAnalysis.next_step}</p>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 16,
+                    borderRadius: 10,
+                    background: "#fff7ed",
+                    border: "1px solid #fed7aa",
+                  }}
+                >
+                  <p style={{ margin: 0 }}>
+                    AI run analysis has not been stored for this run yet.
+                  </p>
                 </div>
               )}
             </div>
