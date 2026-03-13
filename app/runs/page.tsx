@@ -1,25 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  addDoc,
-  collection,
-  doc,
-  getDocs,
-  orderBy,
-  query,
-  updateDoc,
-} from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { addDoc, collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "../../lib/firebase";
-
-type AiRunAnalysis = {
-  headline: string;
-  summary: string;
-  what_went_well: string[];
-  watchouts: string[];
-  impact_on_training: string;
-  next_step: string;
-};
 
 type Run = {
   id: string;
@@ -30,83 +13,90 @@ type Run = {
   runType: string;
   avgHr: string;
   elevation: string;
-  aiAnalysis?: AiRunAnalysis | null;
+  source?: string;
+  name?: string;
+  distanceMeters?: number;
+  movingTimeSeconds?: number;
+  averageHeartrate?: number | null;
 };
 
-function calculatePaceSeconds(time: string, distance: string) {
-  const distanceNum = parseFloat(distance);
+type RaceGoal = {
+  id: string;
+  name: string;
+  date: string;
+  distanceKm: string;
+  targetTime: string;
+  priority: string;
+  notes: string;
+};
 
-  if (!time || !distanceNum || distanceNum <= 0) {
-    return null;
-  }
+type RaceMatch = {
+  raceName: string;
+  impact: string;
+  impactColor: string;
+  reason: string;
+};
 
+function timeToSeconds(time: string) {
   const parts = time.split(":").map(Number);
-
-  let totalSeconds = 0;
 
   if (parts.length === 2) {
     const [minutes, seconds] = parts;
-    totalSeconds = minutes * 60 + seconds;
-  } else if (parts.length === 3) {
+    return minutes * 60 + seconds;
+  }
+
+  if (parts.length === 3) {
     const [hours, minutes, seconds] = parts;
-    totalSeconds = hours * 3600 + minutes * 60 + seconds;
-  } else {
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  return null;
+}
+
+function getRunDistanceKm(run: Run) {
+  if (run.distanceMeters && run.distanceMeters > 0) {
+    return run.distanceMeters / 1000;
+  }
+
+  const parsed = parseFloat(run.distance || "0");
+  return parsed > 0 ? parsed : 0;
+}
+
+function getRunTimeSeconds(run: Run) {
+  if (run.movingTimeSeconds && run.movingTimeSeconds > 0) {
+    return run.movingTimeSeconds;
+  }
+
+  return timeToSeconds(run.time || "") || 0;
+}
+
+function calculatePaceSeconds(run: Run) {
+  const distanceNum = getRunDistanceKm(run);
+  const totalSeconds = getRunTimeSeconds(run);
+
+  if (!distanceNum || distanceNum <= 0 || !totalSeconds) {
     return null;
   }
 
   return totalSeconds / distanceNum;
 }
 
-function calculatePace(time: string, distance: string) {
-  const paceSeconds = calculatePaceSeconds(time, distance);
+function formatPaceFromSeconds(paceSeconds: number | null) {
+  if (!paceSeconds) return "N/A";
 
-  if (!paceSeconds) {
-    return "N/A";
-  }
+  const minutes = Math.floor(paceSeconds / 60);
+  const seconds = Math.round(paceSeconds % 60);
 
-  const paceMinutesPart = Math.floor(paceSeconds / 60);
-  const paceSecondsPart = Math.round(paceSeconds % 60);
-
-  const formattedSeconds =
-    paceSecondsPart < 10 ? `0${paceSecondsPart}` : `${paceSecondsPart}`;
-
-  return `${paceMinutesPart}:${formattedSeconds} /km`;
+  return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds} /km`;
 }
 
-function calculateTrainingSignals(run: Run, allRuns: Run[]) {
-  const distance = parseFloat(run.distance || "0");
-  const hr = parseFloat(run.avgHr || "0");
-
-  const recentRuns = allRuns.slice(0, 5);
-
-  const avgDistance =
-    recentRuns.reduce((sum, r) => sum + parseFloat(r.distance || "0"), 0) /
-    (recentRuns.length || 1);
-
+function analyseRun(run: Run) {
+  const paceSeconds = calculatePaceSeconds(run);
   const avgHr =
-    recentRuns.reduce((sum, r) => sum + parseFloat(r.avgHr || "0"), 0) /
-    (recentRuns.length || 1);
-
-  const paceSeconds = calculatePaceSeconds(run.time, run.distance);
-
-  const avgPaceSeconds =
-    recentRuns.reduce((sum, r) => {
-      const p = calculatePaceSeconds(r.time, r.distance);
-      return sum + (p || 0);
-    }, 0) / (recentRuns.length || 1);
-
-  return {
-    longerThanAverage: distance > avgDistance * 1.2,
-    fasterThanAverage: !!paceSeconds && paceSeconds < avgPaceSeconds * 0.95,
-    highHeartRate: hr > avgHr * 1.05,
-  };
-}
-
-function analyseRun(run: Run, allRuns: Run[]) {
-  const paceSeconds = calculatePaceSeconds(run.time, run.distance);
-  const avgHr = parseFloat(run.avgHr || "0");
-  const distance = parseFloat(run.distance || "0");
-  const signals = calculateTrainingSignals(run, allRuns);
+    run.averageHeartrate && run.averageHeartrate > 0
+      ? run.averageHeartrate
+      : parseFloat(run.avgHr || "0");
+  const distance = getRunDistanceKm(run);
 
   if (!paceSeconds) {
     return {
@@ -116,125 +106,227 @@ function analyseRun(run: Run, allRuns: Run[]) {
   }
 
   if (run.runType === "easy") {
-    if (signals.highHeartRate) {
-      return {
-        label: "Easy run drifted hard",
-        comment:
-          "This looks tougher than your recent average. It may have added more fatigue than intended for an easy day.",
-      };
-    }
-
-    if (signals.fasterThanAverage) {
-      return {
-        label: "Fast aerobic day",
-        comment:
-          "You ran quicker than your recent average while keeping the session in an aerobic category. Good sign of improving fitness.",
-      };
-    }
-
     if (avgHr > 0 && avgHr <= 150) {
       return {
-        label: "Controlled aerobic run",
-        comment:
-          "Effort looks sustainable and well managed. This is the kind of run that supports consistency without much recovery cost.",
+        label: "Strong aerobic run",
+        comment: "Controlled aerobic work that supports durability and recovery between harder sessions.",
       };
     }
 
-    return {
-      label: "Steady easy mileage",
-      comment:
-        "A useful lower-intensity session that adds volume and supports aerobic development.",
-    };
+    if (avgHr > 150) {
+      return {
+        label: "Easy run drifted a bit hard",
+        comment: "Useful training, but effort may have crept above ideal easy intensity.",
+      };
+    }
   }
 
   if (run.runType === "long") {
-    if (signals.longerThanAverage && signals.highHeartRate) {
-      return {
-        label: "Big endurance stimulus",
-        comment:
-          "This was longer than your recent norm and likely came with a higher recovery cost. Strong endurance value, but monitor fatigue.",
-      };
-    }
-
     if (distance >= 16) {
       return {
-        label: "Useful long-run durability",
-        comment:
-          "This run supports endurance development and is especially helpful for half marathon and marathon preparation.",
+        label: "Strong endurance stimulus",
+        comment: "A meaningful long-run contribution that helps longer race preparation.",
       };
     }
 
     return {
       label: "Moderate endurance session",
-      comment:
-        "Useful aerobic work, though still below the level of a major long-run stimulus.",
+      comment: "Solid aerobic work, though not yet a major long-run signal for the longest races.",
     };
   }
 
   if (run.runType === "tempo") {
-    if (signals.fasterThanAverage) {
-      return {
-        label: "Strong threshold progression",
-        comment:
-          "This was quicker than your recent average and looks like a positive session for 10K and half marathon fitness.",
-      };
-    }
-
     return {
       label: "Threshold development",
-      comment:
-        "This kind of run is useful for improving sustained speed and lactate-threshold fitness.",
+      comment: "This session helps sustained race pace and is especially useful for 10K to half marathon goals.",
     };
   }
 
   if (run.runType === "interval") {
-    if (signals.highHeartRate) {
-      return {
-        label: "Hard speed session",
-        comment:
-          "This looks like a demanding interval effort. Good for speed development, but likely carries a meaningful recovery cost.",
-      };
-    }
-
     return {
       label: "Speed-focused session",
-      comment:
-        "Useful for sharpening pace, top-end running economy, and shorter-distance fitness.",
+      comment: "A sharper workout that supports shorter-race speed and top-end economy.",
     };
   }
 
   if (run.runType === "race") {
     return {
-      label: "Race-quality data point",
-      comment:
-        "This effort is especially valuable because it helps anchor future race predictions against a genuine hard effort.",
+      label: "Race-quality evidence",
+      comment: "This run is highly valuable for estimating current race fitness.",
     };
   }
 
   if (run.runType === "recovery") {
-    if (signals.highHeartRate) {
-      return {
-        label: "Recovery run too costly",
-        comment:
-          "Heart rate was higher than your recent norm, so this may not have functioned as true recovery.",
-      };
-    }
-
     return {
-      label: "Low-stress recovery",
-      comment:
-        "A light session that should help you absorb harder training while maintaining consistency.",
+      label: "Recovery session",
+      comment: "Low-stress running that helps absorb harder training.",
     };
   }
 
   return {
     label: "General aerobic training",
-    comment:
-      "This run contributes to overall consistency and aerobic fitness, even if it is not a key workout.",
+    comment: "Useful consistency work that contributes to overall fitness and volume.",
+  };
+}
+
+function getRunTypeColor(type: string) {
+  switch (type) {
+    case "easy":
+      return "#2563eb";
+    case "long":
+      return "#4f46e5";
+    case "tempo":
+      return "#d97706";
+    case "interval":
+      return "#dc2626";
+    case "race":
+      return "#059669";
+    case "recovery":
+      return "#6b7280";
+    default:
+      return "#475569";
+  }
+}
+
+function getPriorityColor(priority: string) {
+  if (priority === "A") return "#1d4ed8";
+  if (priority === "B") return "#7c3aed";
+  return "#6b7280";
+}
+
+function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
+  if (races.length === 0) return null;
+
+  const distance = getRunDistanceKm(run);
+  const avgHr =
+    run.averageHeartrate && run.averageHeartrate > 0
+      ? run.averageHeartrate
+      : parseFloat(run.avgHr || "0");
+
+  let best: {
+    race: RaceGoal;
+    score: number;
+    impact: string;
+    reason: string;
+  } | null = null;
+
+  for (const race of races) {
+    const raceDistance = parseFloat(race.distanceKm || "0");
+    if (!raceDistance) continue;
+
+    let score = 0;
+    let reason = "Useful general support run.";
+    let impact = "Low";
+
+    const ratio = Math.min(distance, raceDistance) / Math.max(distance || 1, raceDistance || 1);
+
+    score += ratio * 4;
+
+    if (race.priority === "A") score += 2;
+    if (race.priority === "B") score += 1;
+
+    if (run.runType === "long") {
+      if (raceDistance >= 21.1) {
+        score += 5;
+        reason = "Supports endurance and durability for longer races.";
+        impact = "High";
+      } else if (raceDistance >= 10) {
+        score += 2;
+        reason = "Adds useful aerobic support for longer race preparation.";
+        impact = "Medium";
+      }
+    }
+
+    if (run.runType === "tempo") {
+      if (raceDistance >= 10 && raceDistance <= 21.1) {
+        score += 5;
+        reason = "A strong threshold session for 10K to half-marathon targets.";
+        impact = "High";
+      } else if (raceDistance < 10) {
+        score += 3;
+        reason = "Supports sustained speed for shorter race performance.";
+        impact = "Medium";
+      } else {
+        score += 3;
+        reason = "Useful marathon support through threshold development.";
+        impact = "Medium";
+      }
+    }
+
+    if (run.runType === "interval") {
+      if (raceDistance <= 10) {
+        score += 5;
+        reason = "A sharp session that strongly supports shorter-distance race speed.";
+        impact = "High";
+      } else if (raceDistance <= 21.1) {
+        score += 2;
+        reason = "Helpful for speed support, though less specific than threshold work.";
+        impact = "Medium";
+      }
+    }
+
+    if (run.runType === "race") {
+      score += 5;
+      reason = "Race-effort evidence is especially valuable for target assessment.";
+      impact = "High";
+    }
+
+    if (run.runType === "easy") {
+      if (raceDistance >= 10) {
+        score += 2;
+        reason = "Easy mileage helps consistency and supports the broader training block.";
+        impact = "Medium";
+      } else {
+        score += 1;
+        reason = "Useful low-stress support, though not highly race-specific.";
+        impact = "Low";
+      }
+    }
+
+    if (run.runType === "recovery") {
+      score += 0.5;
+      reason = "Mainly supports recovery rather than directly moving race fitness.";
+      impact = "Low";
+    }
+
+    if (distance >= raceDistance * 0.7) {
+      score += 2;
+    }
+
+    if (avgHr >= 155 && (run.runType === "tempo" || run.runType === "race" || run.runType === "interval")) {
+      score += 1;
+    }
+
+    if (!best || score > best.score) {
+      best = {
+        race,
+        score,
+        impact,
+        reason,
+      };
+    }
+  }
+
+  if (!best) return null;
+
+  const impactColor =
+    best.impact === "High"
+      ? "#059669"
+      : best.impact === "Medium"
+      ? "#d97706"
+      : "#6b7280";
+
+  return {
+    raceName: best.race.name,
+    impact: best.impact,
+    impactColor,
+    reason: best.reason,
   };
 }
 
 export default function RunsPage() {
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [races, setRaces] = useState<RaceGoal[]>([]);
   const [date, setDate] = useState("");
   const [distance, setDistance] = useState("");
   const [time, setTime] = useState("");
@@ -242,70 +334,61 @@ export default function RunsPage() {
   const [runType, setRunType] = useState("");
   const [avgHr, setAvgHr] = useState("");
   const [elevation, setElevation] = useState("");
-  const [runs, setRuns] = useState<Run[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [aiError, setAiError] = useState("");
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillMessage, setBackfillMessage] = useState("");
-  const [syncingStrava, setSyncingStrava] = useState(false);
-  const [stravaMessage, setStravaMessage] = useState("");
 
-  async function loadRuns() {
-    const q = query(collection(db, "runs"), orderBy("date", "desc"));
-    const snapshot = await getDocs(q);
+  async function loadData() {
+    const runsQuery = query(collection(db, "runs"), orderBy("date", "desc"));
+    const racesQuery = query(collection(db, "raceGoals"), orderBy("date", "asc"));
 
-    const data: Run[] = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      date: docSnap.data().date || "",
-      distance: String(docSnap.data().distance || ""),
-      time: String(docSnap.data().time || ""),
-      notes: docSnap.data().notes || "",
-      runType: docSnap.data().runType || "",
-      avgHr: String(docSnap.data().avgHr || ""),
-      elevation: String(docSnap.data().elevation || ""),
-      aiAnalysis: docSnap.data().aiAnalysis || null,
+    const [runsSnapshot, racesSnapshot] = await Promise.all([
+      getDocs(runsQuery),
+      getDocs(racesQuery),
+    ]);
+
+    const runData: Run[] = runsSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      date: doc.data().date || "",
+      distance: String(doc.data().distance || ""),
+      time: String(doc.data().time || ""),
+      notes: doc.data().notes || "",
+      runType: doc.data().runType || "",
+      avgHr: String(doc.data().avgHr || ""),
+      elevation: String(doc.data().elevation || ""),
+      source: doc.data().source || "",
+      name: doc.data().name || "",
+      distanceMeters: doc.data().distanceMeters || null,
+      movingTimeSeconds: doc.data().movingTimeSeconds || null,
+      averageHeartrate: doc.data().averageHeartrate || null,
     }));
 
-    setRuns(data);
+    const raceData: RaceGoal[] = racesSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      name: doc.data().name || "",
+      date: doc.data().date || "",
+      distanceKm: String(doc.data().distanceKm || ""),
+      targetTime: doc.data().targetTime || "",
+      priority: doc.data().priority || "A",
+      notes: doc.data().notes || "",
+    }));
+
+    setRuns(runData);
+    setRaces(raceData);
   }
 
   useEffect(() => {
-    loadRuns();
+    loadData();
   }, []);
 
-  async function generateAndStoreAiAnalysis(run: Run, allRuns: Run[]) {
-    const response = await fetch("/api/run-analysis", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        run,
-        allRuns,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data?.error || "Failed to generate AI run analysis.");
-    }
-
-    await updateDoc(doc(db, "runs", run.id), {
-      aiAnalysis: data,
-    });
-  }
+  const latestRaceCount = useMemo(() => races.length, [races]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError("");
-    setAiError("");
-    setBackfillMessage("");
 
     try {
-      const docRef = await addDoc(collection(db, "runs"), {
+      await addDoc(collection(db, "runs"), {
         date,
         distance,
         time,
@@ -313,28 +396,9 @@ export default function RunsPage() {
         runType,
         avgHr,
         elevation,
+        source: "manual",
         createdAt: new Date().toISOString(),
       });
-
-      const newRun: Run = {
-        id: docRef.id,
-        date,
-        distance,
-        time,
-        notes,
-        runType,
-        avgHr,
-        elevation,
-        aiAnalysis: null,
-      };
-
-      const allRunsForAnalysis = [newRun, ...runs];
-
-      try {
-        await generateAndStoreAiAnalysis(newRun, allRunsForAnalysis);
-      } catch (err: any) {
-        setAiError(err.message || "Run saved, but AI analysis could not be generated.");
-      }
 
       setDate("");
       setDistance("");
@@ -344,342 +408,319 @@ export default function RunsPage() {
       setAvgHr("");
       setElevation("");
 
-      await loadRuns();
+      await loadData();
     } catch (err: any) {
-      setError(err.message || "Something went wrong while saving.");
+      setError(err.message || "Something went wrong while saving the run.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleBackfillAiAnalyses() {
-    setBackfilling(true);
-    setAiError("");
-    setBackfillMessage("");
-
-    try {
-      const missingRuns = runs.filter((run) => !run.aiAnalysis);
-
-      if (missingRuns.length === 0) {
-        setBackfillMessage("All runs already have AI analysis.");
-        setBackfilling(false);
-        return;
-      }
-
-      let completed = 0;
-
-      for (const run of missingRuns) {
-        await generateAndStoreAiAnalysis(run, runs);
-        completed += 1;
-      }
-
-      await loadRuns();
-      setBackfillMessage(`Generated AI analysis for ${completed} run${completed === 1 ? "" : "s"}.`);
-    } catch (err: any) {
-      setAiError(err.message || "Failed while generating missing AI analyses.");
-    } finally {
-      setBackfilling(false);
-    }
-  }
-
-  async function handleStravaSync() {
-    const params = new URLSearchParams(window.location.search);
-    const athleteId = params.get("athlete");
-
-    if (!athleteId) {
-      setStravaMessage("Connect Strava first.");
-      return;
-    }
-
-    setSyncingStrava(true);
-    setStravaMessage("");
-
-    try {
-      const response = await fetch("/api/strava/sync", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ athleteId }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Failed to sync Strava.");
-      }
-
-      setStravaMessage(`Imported ${data.imported} run${data.imported === 1 ? "" : "s"} from Strava.`);
-      await loadRuns();
-    } catch (err: any) {
-      setStravaMessage(err.message || "Failed to sync Strava.");
-    } finally {
-      setSyncingStrava(false);
-    }
-  }
-
-  const missingAnalysisCount = runs.filter((run) => !run.aiAnalysis).length;
-
   return (
-    <main style={{ padding: 40, maxWidth: 900, margin: "0 auto" }}>
-      <h1>Runs</h1>
+    <main style={{ maxWidth: 980, margin: "0 auto", display: "grid", gap: 24 }}>
+      <div
+        style={{
+          padding: 24,
+          borderRadius: 20,
+          background: "linear-gradient(135deg, #1d4ed8, #1e3a8a)",
+          color: "white",
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 13, textTransform: "uppercase", opacity: 0.8 }}>
+          Training Log
+        </p>
+        <h1 style={{ margin: "10px 0 10px 0", fontSize: 36 }}>Runs</h1>
+        <p style={{ margin: 0, maxWidth: 760, lineHeight: 1.6, color: "rgba(255,255,255,0.88)" }}>
+          Each run now tries to identify which target race it is helping most, so your log becomes race-aware rather than just a list of sessions.
+        </p>
+      </div>
 
       <div
         style={{
-          marginBottom: 24,
-          padding: 16,
-          borderRadius: 12,
-          border: "1px solid #ddd",
-          background: "#f8fafc",
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 18,
+          padding: 20,
+          boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
         }}
       >
-        <p style={{ marginTop: 0 }}>
-          <strong>Strava Import</strong>
-        </p>
+        <h2 style={{ marginTop: 0 }}>Add run manually</h2>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <a
-            href="/api/strava/connect"
-            style={{
-              padding: 10,
-              borderRadius: 8,
-              border: "1px solid #ddd",
-              background: "white",
-              textDecoration: "none",
-              color: "black",
-            }}
-          >
-            Connect Strava
-          </a>
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
 
-          <button
-            onClick={handleStravaSync}
-            disabled={syncingStrava}
-            type="button"
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Distance in km"
+            value={distance}
+            onChange={(e) => setDistance(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
+
+          <input
+            type="text"
+            placeholder="Time (for example 42:15 or 1:35:20)"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
+
+          <select
+            value={runType}
+            onChange={(e) => setRunType(e.target.value)}
+            required
+            style={{ padding: 12 }}
           >
-            {syncingStrava ? "Syncing Strava..." : "Sync From Strava"}
+            <option value="">Select run type</option>
+            <option value="easy">Easy</option>
+            <option value="long">Long</option>
+            <option value="tempo">Tempo</option>
+            <option value="interval">Interval</option>
+            <option value="race">Race</option>
+            <option value="recovery">Recovery</option>
+          </select>
+
+          <input
+            type="number"
+            placeholder="Average heart rate"
+            value={avgHr}
+            onChange={(e) => setAvgHr(e.target.value)}
+            style={{ padding: 12 }}
+          />
+
+          <input
+            type="number"
+            placeholder="Elevation gain in metres"
+            value={elevation}
+            onChange={(e) => setElevation(e.target.value)}
+            style={{ padding: 12 }}
+          />
+
+          <textarea
+            placeholder="Notes"
+            rows={4}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            style={{ padding: 12 }}
+          />
+
+          <button type="submit" disabled={saving} style={{ padding: 12 }}>
+            {saving ? "Saving..." : "Save Run"}
           </button>
-        </div>
+        </form>
 
-        {stravaMessage && (
-          <p style={{ marginBottom: 0, marginTop: 12 }}>
-            {stravaMessage}
+        {error && (
+          <p style={{ color: "red", marginTop: 12, marginBottom: 0 }}>
+            {error}
           </p>
         )}
       </div>
-
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 32 }}>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
-
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Distance in km"
-          value={distance}
-          onChange={(e) => setDistance(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
-
-        <input
-          type="text"
-          placeholder="Time (for example 42:15 or 1:35:20)"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
-
-        <select
-          value={runType}
-          onChange={(e) => setRunType(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        >
-          <option value="">Select run type</option>
-          <option value="easy">Easy</option>
-          <option value="long">Long</option>
-          <option value="tempo">Tempo</option>
-          <option value="interval">Interval</option>
-          <option value="race">Race</option>
-          <option value="recovery">Recovery</option>
-        </select>
-
-        <input
-          type="number"
-          placeholder="Average heart rate"
-          value={avgHr}
-          onChange={(e) => setAvgHr(e.target.value)}
-          style={{ padding: 12 }}
-        />
-
-        <input
-          type="number"
-          placeholder="Elevation gain in metres"
-          value={elevation}
-          onChange={(e) => setElevation(e.target.value)}
-          style={{ padding: 12 }}
-        />
-
-        <textarea
-          placeholder="Notes"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={4}
-          style={{ padding: 12 }}
-        />
-
-        <button type="submit" disabled={saving} style={{ padding: 12 }}>
-          {saving ? "Saving run and generating AI analysis..." : "Save Run"}
-        </button>
-      </form>
 
       <div
         style={{
-          marginBottom: 24,
-          padding: 16,
-          borderRadius: 12,
-          border: "1px solid #ddd",
-          background: "#f8fafc",
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 18,
+          padding: 20,
+          boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
         }}
       >
-        <p style={{ marginTop: 0 }}>
-          <strong>Missing AI analyses:</strong> {missingAnalysisCount}
-        </p>
+        <h2 style={{ marginTop: 0 }}>Saved runs</h2>
 
-        <button
-          onClick={handleBackfillAiAnalyses}
-          disabled={backfilling || missingAnalysisCount === 0}
-          style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-        >
-          {backfilling ? "Generating missing AI analyses..." : "Generate Missing AI Analyses"}
-        </button>
-
-        {backfillMessage && (
-          <p style={{ color: "green", marginBottom: 0, marginTop: 12 }}>
-            {backfillMessage}
+        {latestRaceCount === 0 && (
+          <p style={{ color: "#6b7280" }}>
+            You have no saved target races yet, so race relevance is not being calculated. Add races on the Races page to unlock race-aware feedback.
           </p>
         )}
-      </div>
 
-      {error && (
-        <p style={{ color: "red", marginBottom: 16 }}>
-          {error}
-        </p>
-      )}
+        <div style={{ display: "grid", gap: 18 }}>
+          {runs.map((run) => {
+            const pace = formatPaceFromSeconds(calculatePaceSeconds(run));
+            const analysis = analyseRun(run);
+            const typeColor = getRunTypeColor(run.runType);
+            const raceMatch = getRaceMatch(run, races);
+            const sourceLabel = run.source || "manual";
 
-      {aiError && (
-        <p style={{ color: "darkorange", marginBottom: 16 }}>
-          {aiError}
-        </p>
-      )}
-
-      <h2>Saved Runs</h2>
-
-      <div style={{ display: "grid", gap: 16 }}>
-        {runs.map((run) => {
-          const analysis = analyseRun(run, runs);
-          const signals = calculateTrainingSignals(run, runs);
-
-          return (
-            <div
-              key={run.id}
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 12,
-                padding: 16,
-                background: "white",
-              }}
-            >
-              <p><strong>Date:</strong> {run.date}</p>
-              <p><strong>Distance:</strong> {run.distance} km</p>
-              <p><strong>Time:</strong> {run.time}</p>
-              <p><strong>Pace:</strong> {calculatePace(run.time, run.distance)}</p>
-              <p><strong>Type:</strong> {run.runType}</p>
-              <p><strong>Average HR:</strong> {run.avgHr}</p>
-              <p><strong>Elevation:</strong> {run.elevation} m</p>
-              <p><strong>Rule-based Analysis:</strong> {analysis.label}</p>
-              <p><strong>Rule-based Comment:</strong> {analysis.comment}</p>
-
-              <div style={{ marginTop: 12 }}>
-                <p><strong>Training Signals:</strong></p>
-                <ul style={{ paddingLeft: 20, marginTop: 8 }}>
-                  {signals.longerThanAverage && <li>Longer than recent runs</li>}
-                  {signals.fasterThanAverage && <li>Faster than recent pace</li>}
-                  {signals.highHeartRate && <li>Higher heart rate than usual</li>}
-                  {!signals.longerThanAverage &&
-                    !signals.fasterThanAverage &&
-                    !signals.highHeartRate && <li>No major deviations from recent training</li>}
-                </ul>
-              </div>
-
-              <p><strong>Notes:</strong> {run.notes}</p>
-
-              {run.aiAnalysis ? (
+            return (
+              <div
+                key={run.id}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 18,
+                  padding: 18,
+                  background: "#f8fafc",
+                }}
+              >
                 <div
                   style={{
-                    marginTop: 16,
-                    padding: 16,
-                    borderRadius: 10,
-                    background: "#f8fafc",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div>
+                    <h3 style={{ margin: 0 }}>{run.name || run.date}</h3>
+                    <p style={{ margin: "4px 0 0 0", color: "#6b7280", fontSize: 14 }}>
+                      {run.date}
+                    </p>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span
+                      style={{
+                        background: typeColor,
+                        color: "white",
+                        padding: "5px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {run.runType || "run"}
+                    </span>
+
+                    <span
+                      style={{
+                        background: "#e5e7eb",
+                        color: "#374151",
+                        padding: "5px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {sourceLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                    gap: 12,
+                    marginBottom: 14,
+                  }}
+                >
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Distance</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                      {getRunDistanceKm(run).toFixed(2)} km
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Time</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{run.time}</p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Pace</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{pace}</p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Avg HR</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                      {run.averageHeartrate || run.avgHr || "N/A"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Elevation</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                      {run.elevation || "0"} m
+                    </p>
+                  </div>
+                </div>
+
+                {raceMatch && (
+                  <div
+                    style={{
+                      background: "white",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 14,
+                      padding: 14,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        marginBottom: 8,
+                      }}
+                    >
+                      <p style={{ margin: 0, fontWeight: 700 }}>
+                        Most relevant target: {raceMatch.raceName}
+                      </p>
+
+                      <span
+                        style={{
+                          border: `1px solid ${raceMatch.impactColor}`,
+                          color: raceMatch.impactColor,
+                          padding: "5px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {raceMatch.impact} impact
+                      </span>
+                    </div>
+
+                    <p style={{ margin: 0, color: "#374151" }}>{raceMatch.reason}</p>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    background: "white",
                     border: "1px solid #e5e7eb",
+                    borderRadius: 14,
+                    padding: 14,
+                    marginBottom: run.notes ? 12 : 0,
                   }}
                 >
-                  <h3 style={{ marginTop: 0 }}>{run.aiAnalysis.headline}</h3>
-                  <p>{run.aiAnalysis.summary}</p>
-
-                  {run.aiAnalysis.what_went_well.length > 0 && (
-                    <>
-                      <p><strong>What went well</strong></p>
-                      <ul>
-                        {run.aiAnalysis.what_went_well.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-
-                  {run.aiAnalysis.watchouts.length > 0 && (
-                    <>
-                      <p><strong>What to watch</strong></p>
-                      <ul>
-                        {run.aiAnalysis.watchouts.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-
-                  <p><strong>Impact on training:</strong> {run.aiAnalysis.impact_on_training}</p>
-                  <p><strong>Next step:</strong> {run.aiAnalysis.next_step}</p>
+                  <p style={{ margin: 0, fontWeight: 700 }}>{analysis.label}</p>
+                  <p style={{ margin: "6px 0 0 0", color: "#374151" }}>{analysis.comment}</p>
                 </div>
-              ) : (
-                <div
-                  style={{
-                    marginTop: 16,
-                    padding: 16,
-                    borderRadius: 10,
-                    background: "#fff7ed",
-                    border: "1px solid #fed7aa",
-                  }}
-                >
-                  <p style={{ margin: 0 }}>
-                    AI run analysis has not been stored for this run yet.
-                  </p>
-                </div>
-              )}
-            </div>
-          );
-        })}
 
-        {runs.length === 0 && <p>No runs saved yet.</p>}
+                {run.notes && (
+                  <div
+                    style={{
+                      background: "white",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 14,
+                      padding: 14,
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Notes</p>
+                    <p style={{ margin: "6px 0 0 0", color: "#111827" }}>{run.notes}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {runs.length === 0 && <p>No runs saved yet.</p>}
+        </div>
       </div>
     </main>
   );
