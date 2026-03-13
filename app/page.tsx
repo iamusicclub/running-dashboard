@@ -62,6 +62,8 @@ type RaceAssessment = {
   statusColor: string;
   summary: string;
   confidence: string;
+  strengths: string[];
+  missing: string[];
 };
 
 function timeToSeconds(time: string) {
@@ -480,6 +482,93 @@ function getStatus(
   };
 }
 
+function buildRaceNeeds(runs: Run[], targetDistanceKm: number) {
+  const candidates = getPredictionCandidates(runs);
+  const weeklyMileage = getWeeklyMileage(runs);
+  const longestRun = getLongestRecentRun(runs);
+
+  const tempoCount = candidates.filter((c) => c.run.runType === "tempo").length;
+  const intervalCount = candidates.filter((c) => c.run.runType === "interval").length;
+  const raceCount = candidates.filter((c) => c.run.runType === "race").length;
+  const longCount = candidates.filter((c) => c.run.runType === "long").length;
+  const recentCandidates = candidates.filter((c) => getDaysAgo(c.run.date) <= 21).length;
+
+  const strengths: string[] = [];
+  const missing: string[] = [];
+
+  if (recentCandidates >= 3) {
+    strengths.push("Recent quality evidence is present.");
+  } else {
+    missing.push("Recent race-specific evidence is still limited.");
+  }
+
+  if (targetDistanceKm <= 10) {
+    if (tempoCount + intervalCount + raceCount >= 3) {
+      strengths.push("You have enough sharper work supporting shorter-distance fitness.");
+    } else {
+      missing.push("More tempo, interval, or race-effort work would strengthen short-race confidence.");
+    }
+
+    if (weeklyMileage >= 25) {
+      strengths.push("Weekly volume is solid enough to support shorter-race performance.");
+    } else {
+      missing.push("A bit more consistent weekly volume would improve stability.");
+    }
+  } else if (targetDistanceKm <= 21.1) {
+    if (tempoCount + raceCount >= 2) {
+      strengths.push("Threshold-style evidence is supporting the race well.");
+    } else {
+      missing.push("More threshold or race-effort sessions would strengthen half-marathon readiness.");
+    }
+
+    if (longestRun >= 14) {
+      strengths.push("Long-run depth is beginning to support endurance well.");
+    } else {
+      missing.push("A longer endurance run would improve confidence for this race.");
+    }
+
+    if (weeklyMileage >= 30) {
+      strengths.push("Recent mileage supports the target reasonably well.");
+    } else {
+      missing.push("More weekly mileage would make this target more convincing.");
+    }
+  } else {
+    if (longestRun >= 24) {
+      strengths.push("Long-run evidence is meaningful for long-distance preparation.");
+    } else {
+      missing.push("Longer long runs are still missing for strong long-race confidence.");
+    }
+
+    if (longCount >= 2) {
+      strengths.push("There is at least some long-run structure in the recent data.");
+    } else {
+      missing.push("More specific long-run work would help this target.");
+    }
+
+    if (weeklyMileage >= 45) {
+      strengths.push("Mileage is starting to look marathon-supportive.");
+    } else {
+      missing.push("Higher consistent mileage would materially improve longer-race readiness.");
+    }
+
+    if (tempoCount + raceCount >= 1) {
+      strengths.push("There is at least some quality support alongside endurance work.");
+    } else {
+      missing.push("A little more threshold-style quality would round out the build.");
+    }
+  }
+
+  if (strengths.length === 0) {
+    strengths.push("General training consistency is still providing some support.");
+  }
+
+  if (missing.length === 0) {
+    missing.push("No obvious major gaps stand out right now.");
+  }
+
+  return { strengths, missing };
+}
+
 function priorityColor(priority: string) {
   if (priority === "A") return "#1d4ed8";
   if (priority === "B") return "#7c3aed";
@@ -620,6 +709,7 @@ export default function HomePage() {
       const daysToRace = getDaysToRace(race.date);
       const confidence = getConfidenceForDistance(runs, distanceKm);
       const status = getStatus(gapSeconds, targetSeconds, daysToRace, confidence);
+      const needs = buildRaceNeeds(runs, distanceKm);
 
       return {
         id: race.id,
@@ -646,6 +736,8 @@ export default function HomePage() {
         statusColor: status.color,
         summary: status.summary,
         confidence,
+        strengths: needs.strengths,
+        missing: needs.missing,
       } as RaceAssessment;
     });
   }, [races, runs]);
@@ -669,8 +761,8 @@ export default function HomePage() {
           Training should serve your target races
         </h1>
         <p style={{ margin: 0, maxWidth: 780, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>
-          These race cards now use softer status logic. The site separates “behind target” from
-          “needs more evidence” and gives a wider on-track band when the gap is small.
+          Each race card now shows not just the target and estimate, but also what is already supporting the goal
+          and what is still missing from the current training evidence.
         </p>
       </div>
 
@@ -695,7 +787,7 @@ export default function HomePage() {
             />
           </div>
 
-          <SectionCard title="Target Race Cards" rightText="Softer status logic enabled">
+          <SectionCard title="Target Race Cards" rightText="With strengths and gaps">
             {raceAssessments.length === 0 ? (
               <p>
                 No target races saved yet. Go to <a href="/races">Races</a> and add your key events first.
@@ -704,7 +796,7 @@ export default function HomePage() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
                   gap: 16,
                 }}
               >
@@ -836,9 +928,54 @@ export default function HomePage() {
                         borderRadius: 12,
                         background: "#f8fafc",
                         border: "1px solid #e5e7eb",
+                        marginBottom: 12,
                       }}
                     >
                       <p style={{ margin: 0, color: "#374151" }}>{race.summary}</p>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr",
+                        gap: 12,
+                      }}
+                    >
+                      <div
+                        style={{
+                          background: "#f0fdf4",
+                          border: "1px solid #bbf7d0",
+                          borderRadius: 12,
+                          padding: 12,
+                        }}
+                      >
+                        <p style={{ margin: 0, fontWeight: 700, color: "#166534" }}>What is helping</p>
+                        <ul style={{ margin: "8px 0 0 18px", color: "#166534" }}>
+                          {race.strengths.map((item) => (
+                            <li key={item} style={{ marginBottom: 6 }}>
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div
+                        style={{
+                          background: "#fff7ed",
+                          border: "1px solid #fed7aa",
+                          borderRadius: 12,
+                          padding: 12,
+                        }}
+                      >
+                        <p style={{ margin: 0, fontWeight: 700, color: "#9a3412" }}>What is missing</p>
+                        <ul style={{ margin: "8px 0 0 18px", color: "#9a3412" }}>
+                          {race.missing.map((item) => (
+                            <li key={item} style={{ marginBottom: 6 }}>
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -856,10 +993,10 @@ export default function HomePage() {
             <SectionCard title="Interpretation notes">
               <div style={{ display: "grid", gap: 10, color: "#374151" }}>
                 <p style={{ margin: 0 }}>
-                  “On track” now covers small gaps rather than calling them behind too early.
+                  “What is helping” shows the strongest positive evidence currently visible in the training data.
                 </p>
                 <p style={{ margin: 0 }}>
-                  “Needs evidence” is used when the current training data is too thin to justify a harsh conclusion.
+                  “What is missing” highlights the main evidence gaps, not a full prescription. This is about showing why confidence is high or low.
                 </p>
               </div>
             </SectionCard>
