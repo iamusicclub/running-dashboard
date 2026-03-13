@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { useEffect, useState } from "react";
+import { addDoc, collection, getDocs, orderBy, query } from "firebase/firestore";
+import { db } from "../../lib/firebase";
 
 type RaceGoal = {
   id: string;
