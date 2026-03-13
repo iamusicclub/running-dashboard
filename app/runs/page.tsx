@@ -4,6 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { addDoc, collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 
+type StravaLap = {
+  id?: number;
+  name?: string;
+  distance?: number;
+  moving_time?: number;
+  elapsed_time?: number;
+  average_heartrate?: number | null;
+  max_heartrate?: number | null;
+  pace_zone?: number | null;
+  lap_index?: number;
+};
+
 type Run = {
   id: string;
   date: string;
@@ -19,6 +31,7 @@ type Run = {
   movingTimeSeconds?: number;
   averageHeartrate?: number | null;
   workoutType?: number | null;
+  laps?: StravaLap[];
 };
 
 type RaceGoal = {
@@ -129,6 +142,75 @@ function getBestRacePaceSeconds(races: RaceGoal[]) {
   return Math.min(...paces);
 }
 
+function getLapPaceSeconds(lap: StravaLap) {
+  const distanceKm = (lap.distance || 0) / 1000;
+  const movingTime = lap.moving_time || 0;
+
+  if (!distanceKm || !movingTime) return null;
+
+  return movingTime / distanceKm;
+}
+
+function detectWorkoutFromLaps(run: Run, races: RaceGoal[]) {
+  const laps = run.laps || [];
+  if (laps.length < 2) return null;
+
+  const bestRacePace = getBestRacePaceSeconds(races);
+
+  const lapPaces = laps
+    .map((lap) => ({
+      distanceKm: (lap.distance || 0) / 1000,
+      paceSeconds: getLapPaceSeconds(lap),
+      hr: lap.average_heartrate || 0,
+      name: normaliseText(lap.name || ""),
+    }))
+    .filter((lap) => lap.distanceKm > 0.2 && lap.paceSeconds !== null) as {
+    distanceKm: number;
+    paceSeconds: number;
+    hr: number;
+    name: string;
+  }[];
+
+  if (lapPaces.length < 2) return null;
+
+  const hardLaps = lapPaces.filter((lap) => {
+    if (lap.name.includes("recovery")) return false;
+    if (lap.name.includes("recover")) return false;
+    if (lap.name.includes("rest")) return false;
+
+    if (bestRacePace) {
+      return lap.paceSeconds <= bestRacePace + 15;
+    }
+
+    return lap.hr >= 155 || lap.paceSeconds <= 255;
+  });
+
+  const recoveryLaps = lapPaces.filter((lap) => {
+    if (lap.name.includes("recovery") || lap.name.includes("recover") || lap.name.includes("rest")) {
+      return true;
+    }
+
+    if (bestRacePace) {
+      return lap.paceSeconds >= bestRacePace + 35;
+    }
+
+    return lap.paceSeconds >= 310;
+  });
+
+  const sustainedHardDistance = hardLaps.reduce((sum, lap) => sum + lap.distanceKm, 0);
+  const repeatedHardLaps = hardLaps.filter((lap) => lap.distanceKm >= 0.8).length;
+
+  if (repeatedHardLaps >= 2 && recoveryLaps.length >= 1) {
+    return "interval";
+  }
+
+  if (sustainedHardDistance >= 5) {
+    return "tempo";
+  }
+
+  return null;
+}
+
 function inferDisplayRunType(run: Run, races: RaceGoal[]) {
   const storedType = normaliseText(run.runType || "");
   const runName = normaliseText(run.name || "");
@@ -145,7 +227,11 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
 
   const bestRacePace = getBestRacePaceSeconds(races);
 
-  // 1) Strong keyword rules first
+  const lapDetectedType = detectWorkoutFromLaps(run, races);
+  if (lapDetectedType) {
+    return lapDetectedType;
+  }
+
   if (
     text.includes("race") ||
     text.includes("parkrun") ||
@@ -175,7 +261,6 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
   if (
     text.includes("tempo") ||
     text.includes("threshold") ||
-    text.includes("steady hard") ||
     text.includes("progression")
   ) {
     return "tempo";
@@ -187,7 +272,6 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
 
   if (
     text.includes("recovery") ||
-    text.includes("rec ") ||
     text.includes("shakeout") ||
     text.includes("shake out")
   ) {
@@ -202,9 +286,6 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
     return "steady";
   }
 
-  // 2) Use Strava workoutType if present
-  // Common practical mapping:
-  // 1 = race, 2 = long run, 3 = workout
   if (run.workoutType === 1) {
     return "race";
   }
@@ -217,32 +298,26 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
     return "interval";
   }
 
-  // 3) Keep manual non-Strava labels if user explicitly entered them
   if (run.source !== "strava" && storedType) {
     return storedType;
   }
 
-  // 4) If we have target-race pace context, use it
   if (bestRacePace && paceSeconds) {
     const delta = paceSeconds - bestRacePace;
 
-    // Close to race pace with enough effort: likely tempo / threshold
     if (distanceKm >= 6 && distanceKm <= 18 && delta <= 20 && avgHr >= 150) {
       return "tempo";
     }
 
-    // Much faster / sharper than target race pace
     if (distanceKm <= 10 && delta <= 10 && avgHr >= 158) {
       return "interval";
     }
 
-    // Long and fairly controlled
     if (distanceKm >= 16 && delta >= 20) {
       return "long";
     }
   }
 
-  // 5) General metric heuristics
   if (distanceKm >= 18 || timeSeconds >= 5400) {
     return "long";
   }
@@ -260,7 +335,7 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
       return "tempo";
     }
 
-    if (avgHr >= 155 && paceSeconds && distanceKm >= 6 && distanceKm <= 16) {
+    if (avgHr >= 152 && distanceKm >= 6 && distanceKm <= 16) {
       return "steady";
     }
   }
@@ -271,12 +346,10 @@ function inferDisplayRunType(run: Run, races: RaceGoal[]) {
     }
   }
 
-  // 6) If Strava imported it as easy, but nothing supports that, downgrade to steady
   if (storedType === "easy" && run.source === "strava") {
     return "steady";
   }
 
-  // 7) Final fallback
   if (storedType) {
     return storedType;
   }
@@ -330,7 +403,7 @@ function analyseRun(run: Run, displayType: string) {
   if (displayType === "interval") {
     return {
       label: "Structured quality session",
-      comment: "This run likely contains harder repetitions or race-pace blocks, so it should be treated as a workout rather than easy mileage.",
+      comment: "The available evidence suggests repetitions, race-pace blocks, or split-based workout structure rather than easy mileage.",
     };
   }
 
@@ -387,12 +460,6 @@ function getRunTypeColor(type: string) {
     default:
       return "#475569";
   }
-}
-
-function getPriorityColor(priority: string) {
-  if (priority === "A") return "#1d4ed8";
-  if (priority === "B") return "#7c3aed";
-  return "#6b7280";
 }
 
 function getRaceMatch(run: Run, races: RaceGoal[], displayType: string): RaceMatch | null {
@@ -556,6 +623,7 @@ export default function RunsPage() {
       movingTimeSeconds: doc.data().movingTimeSeconds || null,
       averageHeartrate: doc.data().averageHeartrate || null,
       workoutType: doc.data().workoutType ?? null,
+      laps: Array.isArray(doc.data().laps) ? doc.data().laps : [],
     }));
 
     const raceData: RaceGoal[] = racesSnapshot.docs.map((doc) => ({
@@ -628,7 +696,7 @@ export default function RunsPage() {
         <h1 style={{ margin: "10px 0 10px 0", fontSize: 36 }}>Runs</h1>
         <p style={{ margin: 0, maxWidth: 760, lineHeight: 1.6, color: "rgba(255,255,255,0.88)" }}>
           Imported Strava runs are now classified using smarter rules instead of defaulting too easily to “easy”.
-          This uses title keywords, workout type, pace, HR, distance, and your target race paces.
+          If laps are already present in Firestore, they are used first.
         </p>
       </div>
 
@@ -844,6 +912,13 @@ export default function RunsPage() {
                     <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Elevation</p>
                     <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
                       {run.elevation || "0"} m
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Laps</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                      {Array.isArray(run.laps) ? run.laps.length : 0}
                     </p>
                   </div>
                 </div>
