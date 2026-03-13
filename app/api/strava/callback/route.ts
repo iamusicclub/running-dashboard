@@ -1,73 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "../../../../lib/firebase";
 
-export async function GET(req: NextRequest) {
-  const clientId = process.env.STRAVA_CLIENT_ID;
-  const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+const TOKEN_COLLECTION = "stravaAuth";
+const TOKEN_DOC_ID = "primary";
 
-  if (!clientId || !clientSecret) {
-    return NextResponse.json(
-      { error: "Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET" },
-      { status: 500 }
+export async function GET(request: NextRequest) {
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const code = searchParams.get("code");
+    const error = searchParams.get("error");
+
+    if (error) {
+      return NextResponse.redirect(new URL(`/runs?error=${encodeURIComponent(error)}`, request.url));
+    }
+
+    if (!code) {
+      return NextResponse.redirect(
+        new URL("/runs?error=Missing%20Strava%20authorization%20code", request.url)
+      );
+    }
+
+    const clientId = process.env.STRAVA_CLIENT_ID;
+    const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return NextResponse.redirect(
+        new URL("/runs?error=Missing%20STRAVA_CLIENT_ID%20or%20STRAVA_CLIENT_SECRET", request.url)
+      );
+    }
+
+    const tokenResponse = await fetch("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        grant_type: "authorization_code",
+      }),
+      cache: "no-store",
+    });
+
+    if (!tokenResponse.ok) {
+      const text = await tokenResponse.text();
+      return NextResponse.redirect(
+        new URL(`/runs?error=${encodeURIComponent(`Failed to exchange Strava code: ${text}`)}`, request.url)
+      );
+    }
+
+    const tokenData = await tokenResponse.json();
+
+    await setDoc(
+      doc(db, TOKEN_COLLECTION, TOKEN_DOC_ID),
+      {
+        access_token: tokenData.access_token || "",
+        refresh_token: tokenData.refresh_token || "",
+        expires_at: tokenData.expires_at || null,
+        athlete: tokenData.athlete || null,
+        scope: tokenData.scope || "",
+        token_type: tokenData.token_type || "",
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return NextResponse.redirect(new URL("/runs?strava=connected", request.url));
+  } catch (error: any) {
+    return NextResponse.redirect(
+      new URL(
+        `/runs?error=${encodeURIComponent(error?.message || "Unknown Strava callback error")}`,
+        request.url
+      )
     );
   }
-
-  const searchParams = req.nextUrl.searchParams;
-  const code = searchParams.get("code");
-  const scope = searchParams.get("scope");
-  const error = searchParams.get("error");
-
-  if (error) {
-    return NextResponse.redirect(new URL("/runs?strava=denied", req.url));
-  }
-
-  if (!code) {
-    return NextResponse.json(
-      { error: "No Strava authorization code received." },
-      { status: 400 }
-    );
-  }
-
-  const tokenResponse = await fetch("https://www.strava.com/oauth/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code,
-      grant_type: "authorization_code",
-    }),
-  });
-
-  const tokenData = await tokenResponse.json();
-
-  if (!tokenResponse.ok) {
-    return NextResponse.json(
-      { error: tokenData?.message || "Failed to exchange Strava code." },
-      { status: 500 }
-    );
-  }
-
-  const athleteId = String(tokenData?.athlete?.id || "default-user");
-
-  await setDoc(
-    doc(db, "stravaConnections", athleteId),
-    {
-      athleteId,
-      scope: scope || "",
-      accessToken: tokenData.access_token,
-      refreshToken: tokenData.refresh_token,
-      expiresAt: tokenData.expires_at,
-      athlete: tokenData.athlete || null,
-      updatedAt: new Date().toISOString(),
-    },
-    { merge: true }
-  );
-
-  return NextResponse.redirect(
-    new URL(`/runs?strava=connected&athlete=${athleteId}`, req.url)
-  );
 }
