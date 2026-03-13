@@ -18,6 +18,7 @@ type Run = {
   distanceMeters?: number;
   movingTimeSeconds?: number;
   averageHeartrate?: number | null;
+  workoutType?: number | null;
 };
 
 type RaceGoal = {
@@ -51,6 +52,19 @@ function timeToSeconds(time: string) {
   }
 
   return null;
+}
+
+function secondsToTime(totalSeconds: number) {
+  const rounded = Math.round(totalSeconds);
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const seconds = rounded % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes < 10 ? `0${minutes}` : minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
+  }
+
+  return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
 }
 
 function getRunDistanceKm(run: Run) {
@@ -90,7 +104,187 @@ function formatPaceFromSeconds(paceSeconds: number | null) {
   return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds} /km`;
 }
 
-function analyseRun(run: Run) {
+function normaliseText(value: string) {
+  return value.toLowerCase().trim();
+}
+
+function getTargetPaceSeconds(race: RaceGoal) {
+  const distanceKm = parseFloat(race.distanceKm || "0");
+  const targetSeconds = timeToSeconds(race.targetTime || "");
+
+  if (!distanceKm || !targetSeconds) {
+    return null;
+  }
+
+  return targetSeconds / distanceKm;
+}
+
+function getBestRacePaceSeconds(races: RaceGoal[]) {
+  const paces = races
+    .map((race) => getTargetPaceSeconds(race))
+    .filter((pace): pace is number => pace !== null);
+
+  if (paces.length === 0) return null;
+
+  return Math.min(...paces);
+}
+
+function inferDisplayRunType(run: Run, races: RaceGoal[]) {
+  const storedType = normaliseText(run.runType || "");
+  const runName = normaliseText(run.name || "");
+  const notes = normaliseText(run.notes || "");
+  const text = `${runName} ${notes}`;
+
+  const distanceKm = getRunDistanceKm(run);
+  const timeSeconds = getRunTimeSeconds(run);
+  const paceSeconds = calculatePaceSeconds(run);
+  const avgHr =
+    run.averageHeartrate && run.averageHeartrate > 0
+      ? run.averageHeartrate
+      : parseFloat(run.avgHr || "0");
+
+  const bestRacePace = getBestRacePaceSeconds(races);
+
+  // 1) Strong keyword rules first
+  if (
+    text.includes("race") ||
+    text.includes("parkrun") ||
+    text.includes("time trial")
+  ) {
+    return "race";
+  }
+
+  if (
+    text.includes("interval") ||
+    text.includes("reps") ||
+    text.includes("repeat") ||
+    text.includes("fartlek") ||
+    text.includes("track") ||
+    text.includes("session") ||
+    text.includes("3x") ||
+    text.includes("4x") ||
+    text.includes("5x") ||
+    text.includes("6x") ||
+    text.includes("2 x") ||
+    text.includes("3 x") ||
+    text.includes("4 x")
+  ) {
+    return "interval";
+  }
+
+  if (
+    text.includes("tempo") ||
+    text.includes("threshold") ||
+    text.includes("steady hard") ||
+    text.includes("progression")
+  ) {
+    return "tempo";
+  }
+
+  if (text.includes("long run") || text.includes("long")) {
+    return "long";
+  }
+
+  if (
+    text.includes("recovery") ||
+    text.includes("rec ") ||
+    text.includes("shakeout") ||
+    text.includes("shake out")
+  ) {
+    return "recovery";
+  }
+
+  if (text.includes("easy")) {
+    return "easy";
+  }
+
+  if (text.includes("steady")) {
+    return "steady";
+  }
+
+  // 2) Use Strava workoutType if present
+  // Common practical mapping:
+  // 1 = race, 2 = long run, 3 = workout
+  if (run.workoutType === 1) {
+    return "race";
+  }
+
+  if (run.workoutType === 2) {
+    return "long";
+  }
+
+  if (run.workoutType === 3) {
+    return "interval";
+  }
+
+  // 3) Keep manual non-Strava labels if user explicitly entered them
+  if (run.source !== "strava" && storedType) {
+    return storedType;
+  }
+
+  // 4) If we have target-race pace context, use it
+  if (bestRacePace && paceSeconds) {
+    const delta = paceSeconds - bestRacePace;
+
+    // Close to race pace with enough effort: likely tempo / threshold
+    if (distanceKm >= 6 && distanceKm <= 18 && delta <= 20 && avgHr >= 150) {
+      return "tempo";
+    }
+
+    // Much faster / sharper than target race pace
+    if (distanceKm <= 10 && delta <= 10 && avgHr >= 158) {
+      return "interval";
+    }
+
+    // Long and fairly controlled
+    if (distanceKm >= 16 && delta >= 20) {
+      return "long";
+    }
+  }
+
+  // 5) General metric heuristics
+  if (distanceKm >= 18 || timeSeconds >= 5400) {
+    return "long";
+  }
+
+  if (avgHr > 0) {
+    if (avgHr <= 142) {
+      return "recovery";
+    }
+
+    if (avgHr <= 148) {
+      return "easy";
+    }
+
+    if (avgHr >= 160 && distanceKm >= 5 && distanceKm <= 16) {
+      return "tempo";
+    }
+
+    if (avgHr >= 155 && paceSeconds && distanceKm >= 6 && distanceKm <= 16) {
+      return "steady";
+    }
+  }
+
+  if (paceSeconds) {
+    if (distanceKm >= 8 && distanceKm <= 16 && paceSeconds <= 270) {
+      return "steady";
+    }
+  }
+
+  // 6) If Strava imported it as easy, but nothing supports that, downgrade to steady
+  if (storedType === "easy" && run.source === "strava") {
+    return "steady";
+  }
+
+  // 7) Final fallback
+  if (storedType) {
+    return storedType;
+  }
+
+  return "steady";
+}
+
+function analyseRun(run: Run, displayType: string) {
   const paceSeconds = calculatePaceSeconds(run);
   const avgHr =
     run.averageHeartrate && run.averageHeartrate > 0
@@ -105,84 +299,91 @@ function analyseRun(run: Run) {
     };
   }
 
-  if (run.runType === "easy") {
-    if (avgHr > 0 && avgHr <= 150) {
-      return {
-        label: "Strong aerobic run",
-        comment: "Controlled aerobic work that supports durability and recovery between harder sessions.",
-      };
-    }
-
-    if (avgHr > 150) {
-      return {
-        label: "Easy run drifted a bit hard",
-        comment: "Useful training, but effort may have crept above ideal easy intensity.",
-      };
-    }
+  if (displayType === "recovery") {
+    return {
+      label: "Recovery session",
+      comment: "Low-stress running intended to support recovery and keep training moving.",
+    };
   }
 
-  if (run.runType === "long") {
+  if (displayType === "easy") {
+    return {
+      label: "Aerobic support run",
+      comment: "Useful low-to-moderate aerobic mileage that supports consistency and durability.",
+    };
+  }
+
+  if (displayType === "steady") {
+    return {
+      label: "Steady aerobic session",
+      comment: "A stronger-than-easy aerobic run that adds useful conditioning without being a full quality session.",
+    };
+  }
+
+  if (displayType === "tempo") {
+    return {
+      label: "Threshold-style work",
+      comment: "This looks much more like sustained quality work than an easy run and should support race-specific fitness well.",
+    };
+  }
+
+  if (displayType === "interval") {
+    return {
+      label: "Structured quality session",
+      comment: "This run likely contains harder repetitions or race-pace blocks, so it should be treated as a workout rather than easy mileage.",
+    };
+  }
+
+  if (displayType === "long") {
     if (distance >= 16) {
       return {
-        label: "Strong endurance stimulus",
-        comment: "A meaningful long-run contribution that helps longer race preparation.",
+        label: "Endurance-building run",
+        comment: "Strong long-run stimulus that supports endurance and durability for longer races.",
       };
     }
 
     return {
       label: "Moderate endurance session",
-      comment: "Solid aerobic work, though not yet a major long-run signal for the longest races.",
+      comment: "Useful endurance work, even if not yet a major long-run signal.",
     };
   }
 
-  if (run.runType === "tempo") {
-    return {
-      label: "Threshold development",
-      comment: "This session helps sustained race pace and is especially useful for 10K to half marathon goals.",
-    };
-  }
-
-  if (run.runType === "interval") {
-    return {
-      label: "Speed-focused session",
-      comment: "A sharper workout that supports shorter-race speed and top-end economy.",
-    };
-  }
-
-  if (run.runType === "race") {
+  if (displayType === "race") {
     return {
       label: "Race-quality evidence",
-      comment: "This run is highly valuable for estimating current race fitness.",
+      comment: "This run provides strong evidence for current fitness and race-readiness.",
     };
   }
 
-  if (run.runType === "recovery") {
+  if (avgHr > 0 && avgHr >= 160) {
     return {
-      label: "Recovery session",
-      comment: "Low-stress running that helps absorb harder training.",
+      label: "Hard effort",
+      comment: "The intensity looks too high to treat this as an easy run.",
     };
   }
 
   return {
-    label: "General aerobic training",
-    comment: "Useful consistency work that contributes to overall fitness and volume.",
+    label: "General training run",
+    comment: "A useful session, though its exact role is still somewhat ambiguous from summary-level data alone.",
   };
 }
 
 function getRunTypeColor(type: string) {
   switch (type) {
+    case "recovery":
+      return "#6b7280";
     case "easy":
       return "#2563eb";
-    case "long":
-      return "#4f46e5";
+    case "steady":
+      return "#0f766e";
     case "tempo":
       return "#d97706";
     case "interval":
       return "#dc2626";
+    case "long":
+      return "#4f46e5";
     case "race":
       return "#059669";
-    case "recovery":
-      return "#6b7280";
     default:
       return "#475569";
   }
@@ -194,7 +395,7 @@ function getPriorityColor(priority: string) {
   return "#6b7280";
 }
 
-function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
+function getRaceMatch(run: Run, races: RaceGoal[], displayType: string): RaceMatch | null {
   if (races.length === 0) return null;
 
   const distance = getRunDistanceKm(run);
@@ -225,7 +426,7 @@ function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
     if (race.priority === "A") score += 2;
     if (race.priority === "B") score += 1;
 
-    if (run.runType === "long") {
+    if (displayType === "long") {
       if (raceDistance >= 21.1) {
         score += 5;
         reason = "Supports endurance and durability for longer races.";
@@ -237,10 +438,10 @@ function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
       }
     }
 
-    if (run.runType === "tempo") {
+    if (displayType === "tempo" || displayType === "steady") {
       if (raceDistance >= 10 && raceDistance <= 21.1) {
         score += 5;
-        reason = "A strong threshold session for 10K to half-marathon targets.";
+        reason = "This looks like sustained quality work and should support 10K to half-marathon targets well.";
         impact = "High";
       } else if (raceDistance < 10) {
         score += 3;
@@ -248,12 +449,12 @@ function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
         impact = "Medium";
       } else {
         score += 3;
-        reason = "Useful marathon support through threshold development.";
+        reason = "Useful marathon support through stronger aerobic or threshold work.";
         impact = "Medium";
       }
     }
 
-    if (run.runType === "interval") {
+    if (displayType === "interval") {
       if (raceDistance <= 10) {
         score += 5;
         reason = "A sharp session that strongly supports shorter-distance race speed.";
@@ -265,16 +466,16 @@ function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
       }
     }
 
-    if (run.runType === "race") {
+    if (displayType === "race") {
       score += 5;
       reason = "Race-effort evidence is especially valuable for target assessment.";
       impact = "High";
     }
 
-    if (run.runType === "easy") {
+    if (displayType === "easy" || displayType === "recovery") {
       if (raceDistance >= 10) {
         score += 2;
-        reason = "Easy mileage helps consistency and supports the broader training block.";
+        reason = "Supports consistency and the broader training block.";
         impact = "Medium";
       } else {
         score += 1;
@@ -283,17 +484,11 @@ function getRaceMatch(run: Run, races: RaceGoal[]): RaceMatch | null {
       }
     }
 
-    if (run.runType === "recovery") {
-      score += 0.5;
-      reason = "Mainly supports recovery rather than directly moving race fitness.";
-      impact = "Low";
-    }
-
     if (distance >= raceDistance * 0.7) {
       score += 2;
     }
 
-    if (avgHr >= 155 && (run.runType === "tempo" || run.runType === "race" || run.runType === "interval")) {
+    if (avgHr >= 155 && (displayType === "tempo" || displayType === "race" || displayType === "interval")) {
       score += 1;
     }
 
@@ -360,6 +555,7 @@ export default function RunsPage() {
       distanceMeters: doc.data().distanceMeters || null,
       movingTimeSeconds: doc.data().movingTimeSeconds || null,
       averageHeartrate: doc.data().averageHeartrate || null,
+      workoutType: doc.data().workoutType ?? null,
     }));
 
     const raceData: RaceGoal[] = racesSnapshot.docs.map((doc) => ({
@@ -431,7 +627,8 @@ export default function RunsPage() {
         </p>
         <h1 style={{ margin: "10px 0 10px 0", fontSize: 36 }}>Runs</h1>
         <p style={{ margin: 0, maxWidth: 760, lineHeight: 1.6, color: "rgba(255,255,255,0.88)" }}>
-          Each run now tries to identify which target race it is helping most, so your log becomes race-aware rather than just a list of sessions.
+          Imported Strava runs are now classified using smarter rules instead of defaulting too easily to “easy”.
+          This uses title keywords, workout type, pace, HR, distance, and your target race paces.
         </p>
       </div>
 
@@ -481,12 +678,13 @@ export default function RunsPage() {
             style={{ padding: 12 }}
           >
             <option value="">Select run type</option>
-            <option value="easy">Easy</option>
-            <option value="long">Long</option>
-            <option value="tempo">Tempo</option>
-            <option value="interval">Interval</option>
-            <option value="race">Race</option>
             <option value="recovery">Recovery</option>
+            <option value="easy">Easy</option>
+            <option value="steady">Steady</option>
+            <option value="tempo">Tempo / Threshold</option>
+            <option value="interval">Interval / Session</option>
+            <option value="long">Long</option>
+            <option value="race">Race</option>
           </select>
 
           <input
@@ -544,10 +742,11 @@ export default function RunsPage() {
 
         <div style={{ display: "grid", gap: 18 }}>
           {runs.map((run) => {
+            const displayType = inferDisplayRunType(run, races);
             const pace = formatPaceFromSeconds(calculatePaceSeconds(run));
-            const analysis = analyseRun(run);
-            const typeColor = getRunTypeColor(run.runType);
-            const raceMatch = getRaceMatch(run, races);
+            const analysis = analyseRun(run, displayType);
+            const typeColor = getRunTypeColor(displayType);
+            const raceMatch = getRaceMatch(run, races, displayType);
             const sourceLabel = run.source || "manual";
 
             return (
@@ -588,7 +787,7 @@ export default function RunsPage() {
                         fontWeight: 700,
                       }}
                     >
-                      {run.runType || "run"}
+                      {displayType}
                     </span>
 
                     <span
@@ -624,7 +823,9 @@ export default function RunsPage() {
 
                   <div>
                     <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>Time</p>
-                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>{run.time}</p>
+                    <p style={{ margin: "6px 0 0 0", fontWeight: 700 }}>
+                      {run.time || (getRunTimeSeconds(run) ? secondsToTime(getRunTimeSeconds(run)) : "N/A")}
+                    </p>
                   </div>
 
                   <div>
