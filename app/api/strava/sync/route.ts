@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
+  limit,
+  query,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -16,7 +20,7 @@ type StravaTokenDoc = {
   };
 };
 
-type StravaActivity = {
+type StravaActivitySummary = {
   id: number;
   name: string;
   distance: number;
@@ -40,6 +44,10 @@ type StravaActivity = {
   kudos_count?: number;
 };
 
+type StravaActivityDetail = StravaActivitySummary & {
+  description?: string | null;
+};
+
 type StravaLap = {
   id?: number;
   name?: string;
@@ -54,7 +62,6 @@ type StravaLap = {
 };
 
 const TOKEN_COLLECTION = "stravaAuth";
-const TOKEN_DOC_ID = "primary";
 
 function secondsToTime(totalSeconds: number) {
   const rounded = Math.round(totalSeconds);
@@ -84,8 +91,126 @@ function normaliseText(value: string | undefined | null) {
   return (value || "").toLowerCase().trim();
 }
 
+async function findToken(): Promise<{ ref: any; data: StravaTokenDoc } | null> {
+  const primary = await getDoc(doc(db, TOKEN_COLLECTION, "primary"));
+  if (primary.exists()) {
+    return { ref: primary.ref, data: primary.data() as StravaTokenDoc };
+  }
+
+  const athlete = await getDoc(doc(db, TOKEN_COLLECTION, "athlete"));
+  if (athlete.exists()) {
+    return { ref: athlete.ref, data: athlete.data() as StravaTokenDoc };
+  }
+
+  const token = await getDoc(doc(db, TOKEN_COLLECTION, "token"));
+  if (token.exists()) {
+    return { ref: token.ref, data: token.data() as StravaTokenDoc };
+  }
+
+  const snapshot = await getDocs(query(collection(db, TOKEN_COLLECTION), limit(10)));
+  if (!snapshot.empty) {
+    const docSnap = snapshot.docs[0];
+    return { ref: docSnap.ref, data: docSnap.data() as StravaTokenDoc };
+  }
+
+  return null;
+}
+
+async function refreshAccessToken(refreshToken: string) {
+  const clientId = process.env.STRAVA_CLIENT_ID;
+  const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error("Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET.");
+  }
+
+  const response = await fetch("https://www.strava.com/oauth/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Token refresh failed: ${text}`);
+  }
+
+  return response.json();
+}
+
+async function fetchJson<T>(url: string, accessToken: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Strava request failed (${response.status}): ${text}`);
+  }
+
+  return response.json();
+}
+
+function shouldFetchLaps(activity: StravaActivityDetail) {
+  const name = normaliseText(activity.name);
+  const distanceKm = activity.distance / 1000;
+  const avgHr = activity.average_heartrate || 0;
+  const paceSeconds =
+    activity.distance > 0 && activity.moving_time > 0
+      ? activity.moving_time / (activity.distance / 1000)
+      : null;
+
+  if (activity.workout_type === 1 || activity.workout_type === 3) {
+    return true;
+  }
+
+  if (
+    name.includes("tempo") ||
+    name.includes("threshold") ||
+    name.includes("interval") ||
+    name.includes("reps") ||
+    name.includes("repeat") ||
+    name.includes("track") ||
+    name.includes("fartlek") ||
+    name.includes("session") ||
+    name.includes("3x") ||
+    name.includes("4x") ||
+    name.includes("5x") ||
+    name.includes("6x") ||
+    name.includes("2 x") ||
+    name.includes("3 x") ||
+    name.includes("4 x") ||
+    name.includes("race") ||
+    name.includes("parkrun") ||
+    name.includes("time trial")
+  ) {
+    return true;
+  }
+
+  if (avgHr >= 158 && distanceKm >= 5 && distanceKm <= 18) {
+    return true;
+  }
+
+  if (paceSeconds && paceSeconds <= 245 && distanceKm >= 5 && distanceKm <= 16) {
+    return true;
+  }
+
+  return false;
+}
+
 function inferRunTypeFromDetail(
-  activity: StravaActivity,
+  activity: StravaActivityDetail,
   laps: StravaLap[]
 ): string {
   const name = normaliseText(activity.name);
@@ -245,86 +370,39 @@ function inferRunTypeFromDetail(
   return "easy";
 }
 
-async function refreshAccessToken(refreshToken: string) {
-  const clientId = process.env.STRAVA_CLIENT_ID;
-  const clientSecret = process.env.STRAVA_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET.");
-  }
-
-  const response = await fetch("https://www.strava.com/oauth/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to refresh Strava token: ${text}`);
-  }
-
-  return response.json();
-}
-
-async function fetchJson<T>(url: string, accessToken: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Strava request failed (${response.status}): ${text}`);
-  }
-
-  return response.json();
-}
-
 export async function POST() {
   try {
-    const tokenRef = doc(db, TOKEN_COLLECTION, TOKEN_DOC_ID);
-    const tokenSnap = await getDoc(tokenRef);
+    const tokenResult = await findToken();
 
-    if (!tokenSnap.exists()) {
+    if (!tokenResult) {
       return NextResponse.json(
         {
-          error:
-            `No Strava auth token found at ${TOKEN_COLLECTION}/${TOKEN_DOC_ID}. ` +
-            `Make sure this matches whatever your callback route saves.`,
+          error: "No Strava token found in Firestore. Please click Connect Strava again.",
         },
         { status: 400 }
       );
     }
 
-    const tokenData = tokenSnap.data() as StravaTokenDoc;
+    const { ref, data } = tokenResult;
 
-    if (!tokenData.refresh_token) {
+    if (!data.refresh_token) {
       return NextResponse.json(
-        { error: "Missing refresh_token in saved Strava auth document." },
+        {
+          error: "Strava refresh token missing. Please reconnect Strava.",
+        },
         { status: 400 }
       );
     }
 
-    const refreshed = await refreshAccessToken(tokenData.refresh_token);
+    const refreshed = await refreshAccessToken(data.refresh_token);
 
     await setDoc(
-      tokenRef,
+      ref,
       {
         access_token: refreshed.access_token,
         refresh_token: refreshed.refresh_token,
         expires_at: refreshed.expires_at,
-        athlete: refreshed.athlete || tokenData.athlete || null,
+        athlete: refreshed.athlete || data.athlete || null,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -332,33 +410,15 @@ export async function POST() {
 
     const accessToken = refreshed.access_token as string;
 
-    const allActivities: StravaActivity[] = [];
-    let page = 1;
+    const activities = await fetchJson<StravaActivitySummary[]>(
+      "https://www.strava.com/api/v3/athlete/activities?per_page=50&page=1",
+      accessToken
+    );
 
-    while (allActivities.length < 100) {
-      const pageActivities = await fetchJson<StravaActivity[]>(
-        `https://www.strava.com/api/v3/athlete/activities?per_page=100&page=${page}`,
-        accessToken
-      );
-
-      if (!pageActivities.length) {
-        break;
-      }
-
-      allActivities.push(...pageActivities);
-      page += 1;
-
-      if (pageActivities.length < 100) {
-        break;
-      }
-    }
-
-    const runActivities = allActivities
-      .filter((activity) => {
-        const sportType = normaliseText(activity.sport_type);
-        return sportType === "run" || sportType === "trailrun";
-      })
-      .slice(0, 100);
+    const runActivities = activities.filter((activity) => {
+      const sportType = normaliseText(activity.sport_type);
+      return sportType === "run" || sportType === "trailrun";
+    });
 
     const synced: {
       id: number;
@@ -367,20 +427,22 @@ export async function POST() {
       laps: number;
     }[] = [];
 
-    for (const activity of runActivities) {
-      const detail = await fetchJson<StravaActivity>(
-        `https://www.strava.com/api/v3/activities/${activity.id}?include_all_efforts=false`,
+    for (const summary of runActivities) {
+      const detail = await fetchJson<StravaActivityDetail>(
+        `https://www.strava.com/api/v3/activities/${summary.id}?include_all_efforts=false`,
         accessToken
       );
 
       let laps: StravaLap[] = [];
-      try {
-        laps = await fetchJson<StravaLap[]>(
-          `https://www.strava.com/api/v3/activities/${activity.id}/laps`,
-          accessToken
-        );
-      } catch {
-        laps = [];
+      if (shouldFetchLaps(detail)) {
+        try {
+          laps = await fetchJson<StravaLap[]>(
+            `https://www.strava.com/api/v3/activities/${summary.id}/laps`,
+            accessToken
+          );
+        } catch {
+          laps = [];
+        }
       }
 
       const distanceKm = detail.distance / 1000;
@@ -395,7 +457,7 @@ export async function POST() {
         doc(db, "runs", String(detail.id)),
         {
           stravaActivityId: String(detail.id),
-          athleteId: tokenData.athlete?.id ? String(tokenData.athlete.id) : "",
+          athleteId: data.athlete?.id ? String(data.athlete.id) : "",
           source: "strava",
 
           date: detail.start_date_local
@@ -408,7 +470,7 @@ export async function POST() {
           startDateLocal: detail.start_date_local || "",
 
           name: detail.name || "",
-          notes: "",
+          notes: detail.description || "",
 
           distance: distanceKm.toFixed(2),
           distanceMeters: detail.distance || 0,
