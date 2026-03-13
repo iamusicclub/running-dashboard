@@ -14,6 +14,7 @@ type StravaLap = {
   max_heartrate?: number | null;
   pace_zone?: number | null;
   lap_index?: number;
+  total_elevation_gain?: number | null;
 };
 
 type Run = {
@@ -182,7 +183,7 @@ function detectWorkoutFromLaps(run: Run, races: RaceGoal[]) {
       return lap.paceSeconds <= bestRacePace + 15;
     }
 
-    return lap.hr >= 155 || lap.paceSeconds <= 255;
+    return lap.hr >= 155 || lap.paceSeconds <= 245;
   });
 
   const recoveryLaps = lapPaces.filter((lap) => {
@@ -194,7 +195,7 @@ function detectWorkoutFromLaps(run: Run, races: RaceGoal[]) {
       return lap.paceSeconds >= bestRacePace + 35;
     }
 
-    return lap.paceSeconds >= 310;
+    return lap.paceSeconds >= 300;
   });
 
   const sustainedHardDistance = hardLaps.reduce((sum, lap) => sum + lap.distanceKm, 0);
@@ -597,7 +598,10 @@ export default function RunsPage() {
   const [avgHr, setAvgHr] = useState("");
   const [elevation, setElevation] = useState("");
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState("");
+  const [syncMessage, setSyncMessage] = useState("");
 
   async function loadData() {
     const runsQuery = query(collection(db, "runs"), orderBy("date", "desc"));
@@ -680,6 +684,44 @@ export default function RunsPage() {
     }
   }
 
+  function handleConnectStrava() {
+    setConnecting(true);
+    setSyncMessage("");
+    setError("");
+
+    const baseUrl =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "https://running-dashboard-sand.vercel.app";
+
+    window.location.href = `${baseUrl}/api/strava/connect`;
+  }
+
+  async function handleSyncStrava() {
+    setSyncing(true);
+    setSyncMessage("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/strava/sync", {
+        method: "POST",
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Strava sync failed.");
+      }
+
+      setSyncMessage(`Strava sync completed. Imported or updated ${result.syncedCount || 0} runs.`);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || "Something went wrong while syncing Strava.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <main style={{ maxWidth: 980, margin: "0 auto", display: "grid", gap: 24 }}>
       <div
@@ -696,7 +738,49 @@ export default function RunsPage() {
         <h1 style={{ margin: "10px 0 10px 0", fontSize: 36 }}>Runs</h1>
         <p style={{ margin: 0, maxWidth: 760, lineHeight: 1.6, color: "rgba(255,255,255,0.88)" }}>
           Imported Strava runs are now classified using smarter rules instead of defaulting too easily to “easy”.
-          If laps are already present in Firestore, they are used first.
+          If laps are present in Firestore, they are used first.
+        </p>
+      </div>
+
+      <div
+        style={{
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 18,
+          padding: 20,
+          boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Strava</h2>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleConnectStrava}
+            disabled={connecting}
+            style={{ padding: "12px 16px" }}
+          >
+            {connecting ? "Connecting..." : "Connect Strava"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSyncStrava}
+            disabled={syncing}
+            style={{ padding: "12px 16px" }}
+          >
+            {syncing ? "Syncing..." : "Sync Strava"}
+          </button>
+        </div>
+
+        {syncMessage && (
+          <p style={{ color: "#166534", marginTop: 12, marginBottom: 0 }}>
+            {syncMessage}
+          </p>
+        )}
+
+        <p style={{ color: "#6b7280", marginTop: 12, marginBottom: 0 }}>
+          Connect once, then use Sync Strava to refresh imported runs and update workout classification.
         </p>
       </div>
 
