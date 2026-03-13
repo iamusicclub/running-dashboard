@@ -61,6 +61,7 @@ type RaceAssessment = {
   status: string;
   statusColor: string;
   summary: string;
+  confidence: string;
 };
 
 function timeToSeconds(time: string) {
@@ -215,30 +216,12 @@ function getRunQualityScore(run: Run) {
     reasons.push("General run");
   }
 
-  if (distanceKm >= 5) {
-    score += 2;
-    reasons.push("Useful distance");
-  }
+  if (distanceKm >= 5) score += 2;
+  if (distanceKm >= 10) score += 2;
+  if (distanceKm >= 16) score += 3;
 
-  if (distanceKm >= 10) {
-    score += 2;
-    reasons.push("Strong endurance evidence");
-  }
-
-  if (distanceKm >= 16) {
-    score += 3;
-    reasons.push("Long-distance evidence");
-  }
-
-  if (avgHr >= 150) {
-    score += 2;
-    reasons.push("Likely harder effort");
-  }
-
-  if (avgHr >= 165) {
-    score += 1;
-    reasons.push("High aerobic/threshold strain");
-  }
+  if (avgHr >= 150) score += 2;
+  if (avgHr >= 165) score += 1;
 
   if (daysAgo <= 7) {
     score += 4;
@@ -256,7 +239,7 @@ function getRunQualityScore(run: Run) {
 
   if (run.totalElevationGain && run.totalElevationGain > 200) {
     score -= 1;
-    reasons.push("Hilly route may distort pace");
+    reasons.push("Hilly route");
   }
 
   if (run.trainer) {
@@ -299,7 +282,7 @@ function getDistanceSpecificWeight(candidate: CandidateRun, targetDistanceKm: nu
     Math.min(sourceDistance, targetDistanceKm) / Math.max(sourceDistance, targetDistanceKm);
 
   let weight = candidate.score + 1;
-  weight *= 0.55 + distanceRatio * 0.9;
+  weight *= 0.6 + distanceRatio * 0.85;
 
   if (targetDistanceKm <= 10) {
     if (
@@ -307,16 +290,16 @@ function getDistanceSpecificWeight(candidate: CandidateRun, targetDistanceKm: nu
       candidate.run.runType === "tempo" ||
       candidate.run.runType === "interval"
     ) {
-      weight *= 1.15;
+      weight *= 1.18;
     }
     if (candidate.run.runType === "long") {
-      weight *= 0.9;
+      weight *= 0.92;
     }
   }
 
   if (targetDistanceKm > 10 && targetDistanceKm <= 21.1) {
     if (candidate.run.runType === "tempo" || candidate.run.runType === "race") {
-      weight *= 1.1;
+      weight *= 1.12;
     }
     if (candidate.distanceKm >= 10) {
       weight *= 1.08;
@@ -325,13 +308,13 @@ function getDistanceSpecificWeight(candidate: CandidateRun, targetDistanceKm: nu
 
   if (targetDistanceKm > 21.1) {
     if (candidate.run.runType === "long") {
-      weight *= 1.18;
+      weight *= 1.12;
     }
     if (candidate.distanceKm >= 16) {
-      weight *= 1.2;
+      weight *= 1.12;
     }
     if (candidate.distanceKm < 5) {
-      weight *= 0.75;
+      weight *= 0.82;
     }
   }
 
@@ -350,6 +333,52 @@ function getLongestRecentRun(runs: Run[]) {
     .reduce((max, run) => Math.max(max, getRunDistanceKm(run)), 0);
 }
 
+function getConfidenceForDistance(runs: Run[], targetDistanceKm: number) {
+  const candidates = getPredictionCandidates(runs);
+  const weeklyMileage = getWeeklyMileage(runs);
+  const longestRun = getLongestRecentRun(runs);
+
+  const raceLike = candidates.filter(
+    (c) => c.run.runType === "race" || c.run.runType === "tempo" || c.run.runType === "interval"
+  ).length;
+
+  let score = 0;
+
+  if (candidates.length >= 6) score += 2;
+  else if (candidates.length >= 3) score += 1;
+
+  if (raceLike >= 3) score += 2;
+  else if (raceLike >= 1) score += 1;
+
+  if (targetDistanceKm <= 10) {
+    if (score >= 4) return "High";
+    if (score >= 2) return "Moderate";
+    return "Low";
+  }
+
+  if (targetDistanceKm <= 21.1) {
+    if (weeklyMileage >= 40) score += 2;
+    else if (weeklyMileage >= 25) score += 1;
+
+    if (longestRun >= 18) score += 2;
+    else if (longestRun >= 14) score += 1;
+
+    if (score >= 5) return "High";
+    if (score >= 3) return "Moderate";
+    return "Low";
+  }
+
+  if (weeklyMileage >= 55) score += 2;
+  else if (weeklyMileage >= 35) score += 1;
+
+  if (longestRun >= 28) score += 2;
+  else if (longestRun >= 20) score += 1;
+
+  if (score >= 6) return "High";
+  if (score >= 4) return "Moderate";
+  return "Low";
+}
+
 function buildEstimateForDistance(runs: Run[], targetDistanceKm: number) {
   const candidates = getPredictionCandidates(runs);
 
@@ -360,7 +389,6 @@ function buildEstimateForDistance(runs: Run[], targetDistanceKm: number) {
   const weightedPredictions = candidates.map((candidate) => {
     const predictedSeconds = predictTime(candidate.distanceKm, candidate.timeSeconds, targetDistanceKm);
     const weight = getDistanceSpecificWeight(candidate, targetDistanceKm);
-
     return { predictedSeconds, weight };
   });
 
@@ -376,37 +404,34 @@ function buildEstimateForDistance(runs: Run[], targetDistanceKm: number) {
   const longestRun = getLongestRecentRun(runs);
 
   if (targetDistanceKm >= 30) {
-    if (weeklyMileage < 30) predictedSeconds *= 1.03;
-    if (longestRun < 18) predictedSeconds *= 1.035;
+    if (weeklyMileage < 20) predictedSeconds *= 1.005;
+    if (longestRun < 16) predictedSeconds *= 1.01;
   } else if (targetDistanceKm >= 18) {
-    if (weeklyMileage < 25) predictedSeconds *= 1.015;
-    if (longestRun < 14) predictedSeconds *= 1.02;
+    if (weeklyMileage < 18) predictedSeconds *= 1.003;
+    if (longestRun < 12) predictedSeconds *= 1.008;
   }
 
   return predictedSeconds;
 }
 
 function getGapText(gapSeconds: number | null) {
-  if (gapSeconds === null) {
-    return "N/A";
-  }
+  if (gapSeconds === null) return "N/A";
 
   const abs = Math.abs(gapSeconds);
   const text = secondsToTime(abs);
 
-  if (gapSeconds <= -1) {
-    return `${text} ahead`;
-  }
-
-  if (gapSeconds >= 1) {
-    return `${text} behind`;
-  }
-
+  if (gapSeconds <= -1) return `${text} ahead`;
+  if (gapSeconds >= 1) return `${text} behind`;
   return "On target";
 }
 
-function getStatus(gapSeconds: number | null, daysToRace: number | null) {
-  if (gapSeconds === null) {
+function getStatus(
+  gapSeconds: number | null,
+  targetSeconds: number | null,
+  daysToRace: number | null,
+  confidence: string
+) {
+  if (gapSeconds === null || targetSeconds === null) {
     return {
       label: "No estimate yet",
       color: "#6b7280",
@@ -414,42 +439,44 @@ function getStatus(gapSeconds: number | null, daysToRace: number | null) {
     };
   }
 
-  if (gapSeconds <= 0) {
+  const gapPct = gapSeconds / targetSeconds;
+
+  if (gapPct <= -0.01) {
     return {
       label: "Ahead of target",
       color: "#059669",
-      summary: "Current estimate is at or ahead of the target.",
+      summary: "Current estimate is meaningfully ahead of the target.",
     };
   }
 
-  if (daysToRace === null) {
+  if (gapPct <= 0.02) {
     return {
-      label: "Chasing target",
-      color: "#d97706",
-      summary: "You are behind target, but there is no race date context.",
-    };
-  }
-
-  if (daysToRace > 84) {
-    return {
-      label: "Plenty of time",
+      label: "On track",
       color: "#2563eb",
-      summary: "You are behind target, but there is still a long runway to improve.",
+      summary: "Current estimate sits close enough to the target to be considered on track.",
     };
   }
 
-  if (daysToRace > 35) {
+  if (confidence === "Low") {
     return {
-      label: "Needs progress",
-      color: "#d97706",
-      summary: "You are behind target and the training block now needs specific progress.",
+      label: "Needs evidence",
+      color: "#7c3aed",
+      summary: "The estimate is slightly behind target, but the current evidence base is still thin.",
+    };
+  }
+
+  if (daysToRace !== null && daysToRace > 70) {
+    return {
+      label: "On track",
+      color: "#2563eb",
+      summary: "There is still enough time in the build to close this gap.",
     };
   }
 
   return {
-    label: "Pressure building",
+    label: "Behind target",
     color: "#dc2626",
-    summary: "You are behind target and race day is getting close.",
+    summary: "Current estimate sits behind target and now needs more race-specific progress.",
   };
 }
 
@@ -457,6 +484,12 @@ function priorityColor(priority: string) {
   if (priority === "A") return "#1d4ed8";
   if (priority === "B") return "#7c3aed";
   return "#6b7280";
+}
+
+function confidenceColor(confidence: string) {
+  if (confidence === "High") return "#059669";
+  if (confidence === "Moderate") return "#d97706";
+  return "#7c3aed";
 }
 
 function StatCard({
@@ -585,7 +618,8 @@ export default function HomePage() {
           ? estimateSeconds - targetSeconds
           : null;
       const daysToRace = getDaysToRace(race.date);
-      const status = getStatus(gapSeconds, daysToRace);
+      const confidence = getConfidenceForDistance(runs, distanceKm);
+      const status = getStatus(gapSeconds, targetSeconds, daysToRace, confidence);
 
       return {
         id: race.id,
@@ -611,11 +645,11 @@ export default function HomePage() {
         status: status.label,
         statusColor: status.color,
         summary: status.summary,
+        confidence,
       } as RaceAssessment;
     });
   }, [races, runs]);
 
-  const aRaces = raceAssessments.filter((race) => race.priority === "A");
   const nextRace = raceAssessments.length > 0 ? raceAssessments[0] : null;
 
   return (
@@ -635,8 +669,8 @@ export default function HomePage() {
           Training should serve your target races
         </h1>
         <p style={{ margin: 0, maxWidth: 780, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>
-          This homepage now centres your selected races. Each target shows the goal, current estimate,
-          gap to target, and how urgent the work is becoming.
+          These race cards now use softer status logic. The site separates “behind target” from
+          “needs more evidence” and gives a wider on-track band when the gap is small.
         </p>
       </div>
 
@@ -661,10 +695,7 @@ export default function HomePage() {
             />
           </div>
 
-          <SectionCard
-            title="Target Race Cards"
-            rightText={aRaces.length > 0 ? `${aRaces.length} A-priority race${aRaces.length === 1 ? "" : "s"}` : "All priorities shown"}
-          >
+          <SectionCard title="Target Race Cards" rightText="Softer status logic enabled">
             {raceAssessments.length === 0 ? (
               <p>
                 No target races saved yet. Go to <a href="/races">Races</a> and add your key events first.
@@ -766,16 +797,48 @@ export default function HomePage() {
 
                     <div
                       style={{
+                        display: "flex",
+                        gap: 10,
+                        flexWrap: "wrap",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <span
+                        style={{
+                          border: `1px solid ${race.statusColor}`,
+                          color: race.statusColor,
+                          padding: "5px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {race.status}
+                      </span>
+
+                      <span
+                        style={{
+                          border: `1px solid ${confidenceColor(race.confidence)}`,
+                          color: confidenceColor(race.confidence),
+                          padding: "5px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {race.confidence} confidence
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
                         padding: 12,
                         borderRadius: 12,
                         background: "#f8fafc",
                         border: "1px solid #e5e7eb",
                       }}
                     >
-                      <p style={{ margin: 0, fontWeight: 700, color: race.statusColor }}>
-                        {race.status}
-                      </p>
-                      <p style={{ margin: "6px 0 0 0", color: "#374151" }}>{race.summary}</p>
+                      <p style={{ margin: 0, color: "#374151" }}>{race.summary}</p>
                     </div>
                   </div>
                 ))}
@@ -790,14 +853,13 @@ export default function HomePage() {
               gap: 16,
             }}
           >
-            <SectionCard title="How this will evolve next">
+            <SectionCard title="Interpretation notes">
               <div style={{ display: "grid", gap: 10, color: "#374151" }}>
                 <p style={{ margin: 0 }}>
-                  The homepage is now centred on races. The next step is to make your runs explicitly explain
-                  which race they are helping and how much.
+                  “On track” now covers small gaps rather than calling them behind too early.
                 </p>
                 <p style={{ margin: 0 }}>
-                  After that, we can add more specific visuals showing whether the gap to each target is closing.
+                  “Needs evidence” is used when the current training data is too thin to justify a harsh conclusion.
                 </p>
               </div>
             </SectionCard>
