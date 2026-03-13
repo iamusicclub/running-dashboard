@@ -39,7 +39,6 @@ function calculateTargetPace(targetTime: string, distanceKm: string) {
   }
 
   const paceSeconds = totalSeconds / distance;
-
   const minutes = Math.floor(paceSeconds / 60);
   const seconds = Math.round(paceSeconds % 60);
 
@@ -73,9 +72,9 @@ export default function RacesPage() {
   const [targetTime, setTargetTime] = useState("");
   const [priority, setPriority] = useState("A");
   const [notes, setNotes] = useState("");
-
   const [races, setRaces] = useState<RaceGoal[]>([]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   async function loadRaces() {
     const q = query(collection(db, "raceGoals"), orderBy("date", "asc"));
@@ -101,147 +100,204 @@ export default function RacesPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
+    setError("");
 
-    await addDoc(collection(db, "raceGoals"), {
-      name,
-      date,
-      distanceKm,
-      targetTime,
-      priority,
-      notes,
-      createdAt: new Date().toISOString(),
-    });
+    try {
+      await addDoc(collection(db, "raceGoals"), {
+        name,
+        date,
+        distanceKm,
+        targetTime,
+        priority,
+        notes,
+        createdAt: new Date().toISOString(),
+      });
 
-    setName("");
-    setDate("");
-    setDistanceKm("");
-    setTargetTime("");
-    setPriority("A");
-    setNotes("");
+      setName("");
+      setDate("");
+      setDistanceKm("");
+      setTargetTime("");
+      setPriority("A");
+      setNotes("");
 
-    await loadRaces();
-
-    setSaving(false);
+      await loadRaces();
+    } catch (err: any) {
+      setError(err.message || "Something went wrong while saving the race.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", display: "grid", gap: 24 }}>
-      <h1>Target Races</h1>
-
-      <form
-        onSubmit={handleSubmit}
+      <div
         style={{
-          display: "grid",
-          gap: 12,
-          padding: 20,
-          background: "white",
-          borderRadius: 16,
-          border: "1px solid #e5e7eb",
+          padding: 24,
+          borderRadius: 20,
+          background: "linear-gradient(135deg, #1d4ed8, #1e3a8a)",
+          color: "white",
         }}
       >
-        <input
-          placeholder="Race name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
+        <p style={{ margin: 0, fontSize: 13, textTransform: "uppercase", opacity: 0.8 }}>
+          Race Planner
+        </p>
+        <h1 style={{ margin: "10px 0 10px 0", fontSize: 36 }}>
+          Target races
+        </h1>
+        <p style={{ margin: 0, maxWidth: 700, lineHeight: 1.6, color: "rgba(255,255,255,0.88)" }}>
+          Add the races you care about most. Use any distance in kilometres,
+          including 5 mile, 10 mile, and 20 mile races.
+        </p>
+      </div>
 
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
+      <div
+        style={{
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 18,
+          padding: 20,
+          boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Add target race</h2>
 
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Distance in km (example: 8.05 for 5 mile)"
-          value={distanceKm}
-          onChange={(e) => setDistanceKm(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+          <input
+            type="text"
+            placeholder="Race name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
 
-        <input
-          placeholder="Target time (example: 1:24:30)"
-          value={targetTime}
-          onChange={(e) => setTargetTime(e.target.value)}
-          required
-          style={{ padding: 12 }}
-        />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
 
-        <select
-          value={priority}
-          onChange={(e) => setPriority(e.target.value)}
-          style={{ padding: 12 }}
-        >
-          <option value="A">A race (primary)</option>
-          <option value="B">B race</option>
-          <option value="C">C race</option>
-        </select>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Distance in km (example: 8.05 for 5 mile, 16.09 for 10 mile)"
+            value={distanceKm}
+            onChange={(e) => setDistanceKm(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
 
-        <textarea
-          placeholder="Notes"
-          rows={3}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          style={{ padding: 12 }}
-        />
+          <input
+            type="text"
+            placeholder="Target time (for example 58:30 or 1:24:30 or 2:59:59)"
+            value={targetTime}
+            onChange={(e) => setTargetTime(e.target.value)}
+            required
+            style={{ padding: 12 }}
+          />
 
-        <button type="submit" disabled={saving} style={{ padding: 12 }}>
-          {saving ? "Saving..." : "Save Race"}
-        </button>
-      </form>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            style={{ padding: 12 }}
+          >
+            <option value="A">A race (primary)</option>
+            <option value="B">B race</option>
+            <option value="C">C race</option>
+          </select>
 
-      <h2>Saved races</h2>
+          <textarea
+            placeholder="Notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={4}
+            style={{ padding: 12 }}
+          />
 
-      <div style={{ display: "grid", gap: 16 }}>
-        {races.map((race) => {
-          const days = getDaysToRace(race.date);
-          const pace = calculateTargetPace(race.targetTime, race.distanceKm);
-          const priorityColor = getPriorityColor(race.priority);
+          <button type="submit" disabled={saving} style={{ padding: 12 }}>
+            {saving ? "Saving..." : "Save Race"}
+          </button>
+        </form>
 
-          return (
-            <div
-              key={race.id}
-              style={{
-                border: "1px solid #e5e7eb",
-                borderRadius: 16,
-                padding: 16,
-                background: "white",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <strong>{race.name}</strong>
+        {error && (
+          <p style={{ color: "red", marginBottom: 0, marginTop: 12 }}>
+            {error}
+          </p>
+        )}
+      </div>
 
-                <span
+      <div
+        style={{
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 18,
+          padding: 20,
+          boxShadow: "0 2px 10px rgba(15, 23, 42, 0.05)",
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Saved races</h2>
+
+        {races.length === 0 ? (
+          <p>No target races saved yet.</p>
+        ) : (
+          <div style={{ display: "grid", gap: 16 }}>
+            {races.map((race) => {
+              const days = getDaysToRace(race.date);
+              const pace = calculateTargetPace(race.targetTime, race.distanceKm);
+              const priorityColor = getPriorityColor(race.priority);
+
+              return (
+                <div
+                  key={race.id}
                   style={{
-                    background: priorityColor,
-                    color: "white",
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    fontSize: 12,
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 16,
+                    padding: 16,
+                    background: "#f8fafc",
                   }}
                 >
-                  {race.priority}
-                </span>
-              </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 12,
+                      flexWrap: "wrap",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <strong>{race.name}</strong>
 
-              <p><strong>Date:</strong> {race.date}</p>
-              <p><strong>Distance:</strong> {race.distanceKm} km</p>
-              <p><strong>Target time:</strong> {race.targetTime}</p>
-              <p><strong>Target pace:</strong> {pace}</p>
-              <p><strong>Days to race:</strong> {days}</p>
+                    <span
+                      style={{
+                        background: priorityColor,
+                        color: "white",
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {race.priority} priority
+                    </span>
+                  </div>
 
-              {race.notes && (
-                <p><strong>Notes:</strong> {race.notes}</p>
-              )}
-            </div>
-          );
-        })}
+                  <p><strong>Date:</strong> {race.date}</p>
+                  <p><strong>Distance:</strong> {race.distanceKm} km</p>
+                  <p><strong>Target time:</strong> {race.targetTime}</p>
+                  <p><strong>Target pace:</strong> {pace}</p>
+                  <p><strong>Days to race:</strong> {days}</p>
+
+                  {race.notes && (
+                    <p><strong>Notes:</strong> {race.notes}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </main>
   );
