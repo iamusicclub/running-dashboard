@@ -103,6 +103,17 @@ function formatPaceFromSeconds(paceSeconds: number | null) {
   return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds} /km`;
 }
 
+function formatPace(time: string, distance: string) {
+  const totalSeconds = timeToSeconds(time);
+  const distanceNum = parseFloat(distance);
+
+  if (!totalSeconds || !distanceNum || distanceNum <= 0) {
+    return "N/A";
+  }
+
+  return formatPaceFromSeconds(totalSeconds / distanceNum);
+}
+
 function predictTime(baseDistance: number, baseTime: number, targetDistance: number) {
   return baseTime * Math.pow(targetDistance / baseDistance, 1.06);
 }
@@ -415,7 +426,7 @@ function getStatus(gapSeconds: number | null, daysToRace: number | null) {
     return {
       label: "Chasing target",
       color: "#d97706",
-      summary: "You are behind target, but there is no race date set context.",
+      summary: "You are behind target, but there is no race date context.",
     };
   }
 
