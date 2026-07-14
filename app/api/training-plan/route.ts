@@ -519,10 +519,16 @@ function buildTrainingWeeks(
     const sessionCells = row.cells.slice(1, 8);
 
     const phase =
-      sessionCells
-        .map(detectPhase)
-        .find((value): value is string => Boolean(value)) ||
-      null;
+  sessionCells
+    .map(detectPhase)
+    .find(
+      (
+        value
+      ): value is Exclude<
+        ReturnType<typeof detectPhase>,
+        null
+      > => value !== null
+    ) ?? null;
 
     const sessions = sessionCells
       .map((cell, dayIndex) =>
