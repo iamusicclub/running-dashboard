@@ -1,74 +1,32 @@
-export const metadata = {
-  title: "Running Dashboard",
-  description: "Running analytics and race predictions",
-};
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import AppShell from "./components/AppShell";
 
-const navLink: React.CSSProperties = {
-  color: "white",
-  textDecoration: "none",
-  fontWeight: 500,
-  padding: "6px 10px",
-  borderRadius: 6,
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
+
+export const metadata: Metadata = {
+  title: {
+    default: "Project Sub-3",
+    template: "%s | Project Sub-3",
+  },
+  description:
+    "A dedicated training, progress and race-readiness portal for the Malaga Marathon 2026 sub-three-hour project.",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
-    <html lang="en">
-      <body
-        style={{
-          margin: 0,
-          fontFamily: "Arial, sans-serif",
-          background: "#f4f7fc",
-        }}
-      >
-        <header
-          style={{
-            background: "#1d4ed8",
-            color: "white",
-            padding: "16px 24px",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-          }}
-        >
-          <div
-            style={{
-              maxWidth: 1100,
-              margin: "0 auto",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 16,
-              flexWrap: "wrap",
-            }}
-          >
-            <a
-              href="/"
-              style={{
-                color: "white",
-                fontWeight: 700,
-                fontSize: 18,
-                textDecoration: "none",
-              }}
-            >
-              Running Dashboard
-            </a>
-
-            <nav style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <a style={navLink} href="/">Dashboard</a>
-              <a style={navLink} href="/runs">Runs</a>
-              <a style={navLink} href="/predictions">Predictions</a>
-              <a style={navLink} href="/analysis">Analysis</a>
-              <a style={navLink} href="/races">Races</a>
-            </nav>
-          </div>
-        </header>
-
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-          {children}
-        </div>
+    <html lang="en" className={inter.variable}>
+      <body>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
