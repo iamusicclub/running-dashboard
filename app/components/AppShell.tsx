@@ -7,9 +7,7 @@ import { useEffect, useState } from "react";
 type IconName =
   | "dashboard"
   | "training"
-  | "progress"
   | "race"
-  | "settings"
   | "sheet"
   | "strava"
   | "menu"
@@ -32,11 +30,6 @@ const navigationItems: NavigationItem[] = [
     label: "Training",
     href: "/runs",
     icon: "training",
-  },
-  {
-    label: "Progress",
-    href: "/analysis",
-    icon: "progress",
   },
   {
     label: "Race HQ",
@@ -85,18 +78,6 @@ function Icon({
     );
   }
 
-  if (name === "progress") {
-    return (
-      <svg {...commonProps}>
-        <path d="M4 19V9" />
-        <path d="M10 19V5" />
-        <path d="M16 19v-7" />
-        <path d="M22 19V3" />
-        <path d="M3 19h19" />
-      </svg>
-    );
-  }
-
   if (name === "race") {
     return (
       <svg {...commonProps}>
@@ -104,15 +85,6 @@ function Icon({
         <path d="M12 11v10" />
         <path d="M8 21h8" />
         <path d="m9 7 2 2 4-4" />
-      </svg>
-    );
-  }
-
-  if (name === "settings") {
-    return (
-      <svg {...commonProps}>
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20.5h-3v-.28a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.56-1.03H5.2v-3h.24A1.7 1.7 0 0 0 7 9.94a1.7 1.7 0 0 0-.34-1.88L6.6 8l2.12-2.12.06.06A1.7 1.7 0 0 0 10.66 6a1.7 1.7 0 0 0 1.03-1.56V4.2h3v.24A1.7 1.7 0 0 0 15.72 6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.03h.26v3h-.26A1.7 1.7 0 0 0 19.4 15Z" />
       </svg>
     );
   }
@@ -166,7 +138,11 @@ function Icon({
 
 function Brand() {
   return (
-    <Link href="/" className="brand" aria-label="Project Sub-3 dashboard">
+    <Link
+      href="/"
+      className="brand"
+      aria-label="Project Sub-3 dashboard"
+    >
       <div className="brand-mark" aria-hidden="true">
         <span className="brand-mark-line" />
         <span className="brand-mark-line brand-mark-line-short" />
@@ -190,23 +166,30 @@ function Navigation({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="primary-navigation" aria-label="Primary navigation">
+    <nav
+      className="primary-navigation"
+      aria-label="Primary navigation"
+    >
       {navigationItems.map((item) => {
         const isActive =
           item.href === "/"
             ? pathname === "/"
-            : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            : pathname === item.href ||
+              pathname.startsWith(`${item.href}/`);
 
         return (
           <Link
             key={item.href}
             href={item.href}
-            className={`navigation-link ${isActive ? "navigation-link-active" : ""}`}
+            className={`navigation-link ${
+              isActive ? "navigation-link-active" : ""
+            }`}
             onClick={onNavigate}
           >
             <span className="navigation-icon">
               <Icon name={item.icon} />
             </span>
+
             <span>{item.label}</span>
           </Link>
         );
@@ -227,10 +210,16 @@ function IntegrationPanel() {
 
         <div className="integration-copy">
           <div className="integration-title-row">
-            <span className="integration-title">Coach plan</span>
-            <span className="status-dot status-dot-muted" />
+            <span className="integration-title">
+              Coach plan
+            </span>
+
+            <span className="status-dot status-dot-success" />
           </div>
-          <span className="integration-detail">Google Sheets setup pending</span>
+
+          <span className="integration-detail">
+            Google Sheets connection active
+          </span>
         </div>
       </div>
 
@@ -243,10 +232,16 @@ function IntegrationPanel() {
 
         <div className="integration-copy">
           <div className="integration-title-row">
-            <span className="integration-title">Strava</span>
+            <span className="integration-title">
+              Strava
+            </span>
+
             <span className="status-dot status-dot-success" />
           </div>
-          <span className="integration-detail">Activity connection active</span>
+
+          <span className="integration-detail">
+            Activity connection active
+          </span>
         </div>
       </div>
 
@@ -268,10 +263,18 @@ function Sidebar({
   onNavigate?: () => void;
 }) {
   return (
-    <aside className={mobile ? "mobile-sidebar" : "desktop-sidebar"}>
+    <aside
+      className={
+        mobile ? "mobile-sidebar" : "desktop-sidebar"
+      }
+    >
       <div className="sidebar-top">
         <Brand />
-        <Navigation pathname={pathname} onNavigate={onNavigate} />
+
+        <Navigation
+          pathname={pathname}
+          onNavigate={onNavigate}
+        />
       </div>
 
       <div className="sidebar-bottom">
@@ -279,7 +282,9 @@ function Sidebar({
 
         <div className="sidebar-footer">
           <span>16-week marathon block</span>
-          <span className="sidebar-footer-separator">•</span>
+          <span className="sidebar-footer-separator">
+            •
+          </span>
           <span>Version 2.0</span>
         </div>
       </div>
@@ -293,7 +298,9 @@ export default function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+
+  const [mobileNavigationOpen, setMobileNavigationOpen] =
+    useState(false);
 
   useEffect(() => {
     setMobileNavigationOpen(false);
@@ -322,7 +329,9 @@ export default function AppShell({
         <button
           type="button"
           className="mobile-menu-button"
-          onClick={() => setMobileNavigationOpen(true)}
+          onClick={() =>
+            setMobileNavigationOpen(true)
+          }
           aria-label="Open navigation"
           aria-expanded={mobileNavigationOpen}
         >
@@ -335,18 +344,24 @@ export default function AppShell({
           <button
             type="button"
             className="mobile-navigation-backdrop"
-            onClick={() => setMobileNavigationOpen(false)}
+            onClick={() =>
+              setMobileNavigationOpen(false)
+            }
             aria-label="Close navigation"
           />
 
           <div className="mobile-navigation-drawer">
             <div className="mobile-navigation-toolbar">
-              <span className="mobile-navigation-title">Navigation</span>
+              <span className="mobile-navigation-title">
+                Navigation
+              </span>
 
               <button
                 type="button"
                 className="mobile-menu-button"
-                onClick={() => setMobileNavigationOpen(false)}
+                onClick={() =>
+                  setMobileNavigationOpen(false)
+                }
                 aria-label="Close navigation"
               >
                 <Icon name="close" size={22} />
@@ -356,14 +371,18 @@ export default function AppShell({
             <Sidebar
               pathname={pathname}
               mobile
-              onNavigate={() => setMobileNavigationOpen(false)}
+              onNavigate={() =>
+                setMobileNavigationOpen(false)
+              }
             />
           </div>
         </div>
       )}
 
       <div className="application-content">
-        <main className="page-container">{children}</main>
+        <main className="page-container">
+          {children}
+        </main>
       </div>
     </div>
   );
