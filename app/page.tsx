@@ -37,15 +37,63 @@ type RaceGoal = {
   notes?: string;
 };
 
-const MALAGA_DISTANCE_KM = 42.195;
+type PlannedDistance = {
+  minimumKm: number | null;
+  maximumKm: number | null;
+  display: string;
+};
+
+type PlannedSession = {
+  id: string;
+  sourceRowNumber: number;
+  weekEndingDate: string;
+  plannedDate: string;
+  dayName: string;
+  dayIndex: number;
+  rawText: string;
+  title: string;
+  sessionType: string;
+  isRestDay: boolean;
+  isKeySession: boolean;
+  distance: PlannedDistance;
+  targetPaceText: string | null;
+};
+
+type TrainingWeek = {
+  id: string;
+  sourceRowNumber: number;
+  weekEndingDate: string;
+  weekStartingDate: string;
+  totalVolumeText: string;
+  totalVolumeKm: number | null;
+  performanceText: string;
+  phase: string | null;
+  sessions: PlannedSession[];
+};
+
+type TrainingPlanResponse = {
+  success: boolean;
+  parsedWeekCount?: number;
+  parsedSessionCount?: number;
+  availableYears?: number[];
+  firstWeek?: string | null;
+  finalWeek?: string | null;
+  warning?: string | null;
+  weeks?: TrainingWeek[];
+  sessions?: PlannedSession[];
+  error?: string;
+};
+
+const MARATHON_DISTANCE_KM = 42.195;
 const DEFAULT_TARGET_TIME = "2:59:59";
+const BLOCK_START_DATE = "2026-07-20";
 
 function timeToSeconds(value: string) {
   if (!value) return null;
 
   const parts = value.split(":").map(Number);
 
-  if (parts.some(Number.isNaN)) {
+  if (parts.some((part) => Number.isNaN(part))) {
     return null;
   }
 
@@ -61,7 +109,9 @@ function timeToSeconds(value: string) {
 }
 
 function secondsToTime(value: number | null) {
-  if (!value || value <= 0) return "N/A";
+  if (value === null || !Number.isFinite(value) || value <= 0) {
+    return "N/A";
+  }
 
   const rounded = Math.round(value);
   const hours = Math.floor(rounded / 3600);
@@ -78,7 +128,9 @@ function secondsToTime(value: number | null) {
 }
 
 function formatPace(value: number | null) {
-  if (!value || value <= 0) return "N/A";
+  if (value === null || !Number.isFinite(value) || value <= 0) {
+    return "N/A";
+  }
 
   const rounded = Math.round(value);
   const minutes = Math.floor(rounded / 60);
@@ -90,7 +142,8 @@ function formatPace(value: number | null) {
 function parseDate(value: string) {
   if (!value) return null;
 
-  const date = new Date(`${value.slice(0, 10)}T12:00:00`);
+  const cleanValue = value.slice(0, 10);
+  const date = new Date(`${cleanValue}T12:00:00`);
 
   return Number.isNaN(date.getTime()) ? null : date;
 }
@@ -103,33 +156,52 @@ function dateKey(date: Date) {
   ].join("-");
 }
 
-function getDaysAgo(value: string) {
-  const runDate = parseDate(value);
-
-  if (!runDate) return 9999;
-
+function startOfToday() {
   const today = new Date();
-
   today.setHours(0, 0, 0, 0);
-  runDate.setHours(0, 0, 0, 0);
+  return today;
+}
 
-  return Math.floor(
-    (today.getTime() - runDate.getTime()) / 86400000
+function getDaysBetween(later: Date, earlier: Date) {
+  const laterCopy = new Date(later);
+  const earlierCopy = new Date(earlier);
+
+  laterCopy.setHours(0, 0, 0, 0);
+  earlierCopy.setHours(0, 0, 0, 0);
+
+  return Math.round(
+    (laterCopy.getTime() - earlierCopy.getTime()) / 86400000
   );
 }
 
+function getDaysAgo(value: string) {
+  const date = parseDate(value);
+
+  if (!date) return 9999;
+
+  return getDaysBetween(startOfToday(), date);
+}
+
 function getDaysToRace(value: string) {
-  const raceDate = parseDate(value);
+  const date = parseDate(value);
 
-  if (!raceDate) return null;
+  if (!date) return null;
 
-  const today = new Date();
+  return getDaysBetween(date, startOfToday());
+}
 
-  today.setHours(0, 0, 0, 0);
-  raceDate.setHours(0, 0, 0, 0);
+function getTrainingWeekNumber() {
+  const blockStart = parseDate(BLOCK_START_DATE);
 
-  return Math.ceil(
-    (raceDate.getTime() - today.getTime()) / 86400000
+  if (!blockStart) return 0;
+
+  const today = startOfToday();
+
+  if (today < blockStart) return 0;
+
+  return Math.min(
+    16,
+    Math.max(1, Math.floor(getDaysBetween(today, blockStart) / 7) + 1)
   );
 }
 
@@ -143,7 +215,7 @@ function getRunDistanceKm(run: Run) {
 
   const parsed = Number.parseFloat(run.distance || "0");
 
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function getRunTimeSeconds(run: Run) {
@@ -165,21 +237,12 @@ function getRunPaceSeconds(run: Run) {
     return run.paceSecondsPerKm;
   }
 
-  const distance = getRunDistanceKm(run);
-  const seconds = getRunTimeSeconds(run);
+  const distanceKm = getRunDistanceKm(run);
+  const timeSeconds = getRunTimeSeconds(run);
 
-  return distance > 0 && seconds > 0 ? seconds / distance : null;
-}
+  if (!distanceKm || !timeSeconds) return null;
 
-function getMonday(date: Date) {
-  const result = new Date(date);
-  const day = result.getDay();
-  const difference = day === 0 ? -6 : 1 - day;
-
-  result.setHours(0, 0, 0, 0);
-  result.setDate(result.getDate() + difference);
-
-  return result;
+  return timeSeconds / distanceKm;
 }
 
 function formatDisplayDate(value: string) {
@@ -202,10 +265,10 @@ function findMalagaRace(races: RaceGoal[]) {
     races.find(
       (race) =>
         race.priority === "A" &&
-        Number.parseFloat(race.distanceKm) >= 40
+        Number.parseFloat(race.distanceKm || "0") >= 40
     ) ||
     races.find(
-      (race) => Number.parseFloat(race.distanceKm) >= 40
+      (race) => Number.parseFloat(race.distanceKm || "0") >= 40
     ) ||
     races[0] ||
     null
@@ -213,31 +276,31 @@ function findMalagaRace(races: RaceGoal[]) {
 }
 
 function calculateEvidenceScore(runs: Run[]) {
-  const last28Days = runs.filter((run) => {
+  const recent28 = runs.filter((run) => {
     const daysAgo = getDaysAgo(run.date);
     return daysAgo >= 0 && daysAgo <= 28;
   });
 
-  const last42Days = runs.filter((run) => {
+  const recent42 = runs.filter((run) => {
     const daysAgo = getDaysAgo(run.date);
     return daysAgo >= 0 && daysAgo <= 42;
   });
 
-  const mileage =
-    last28Days.reduce(
-      (total, run) => total + getRunDistanceKm(run),
+  const averageWeeklyMileage =
+    recent28.reduce(
+      (sum, run) => sum + getRunDistanceKm(run),
       0
     ) / 4;
 
-  const longestRun = last42Days.reduce(
-    (maximum, run) =>
-      Math.max(maximum, getRunDistanceKm(run)),
+  const longestRun = recent42.reduce(
+    (maximum, run) => Math.max(maximum, getRunDistanceKm(run)),
     0
   );
 
-  const qualityRuns = last42Days.filter((run) =>
+  const qualityRunCount = recent42.filter((run) =>
     [
       "tempo",
+      "threshold",
       "interval",
       "steady",
       "race",
@@ -249,17 +312,22 @@ function calculateEvidenceScore(runs: Run[]) {
 
   const consistencyScore = Math.min(
     100,
-    (last28Days.length / 16) * 100
+    (recent28.length / 16) * 100
   );
 
-  const mileageScore = Math.min(100, (mileage / 65) * 100);
+  const mileageScore = Math.min(
+    100,
+    (averageWeeklyMileage / 65) * 100
+  );
+
   const enduranceScore = Math.min(
     100,
     (longestRun / 32) * 100
   );
+
   const qualityScore = Math.min(
     100,
-    (qualityRuns / 6) * 100
+    (qualityRunCount / 6) * 100
   );
 
   return Math.round(
@@ -268,6 +336,72 @@ function calculateEvidenceScore(runs: Run[]) {
       enduranceScore * 0.3 +
       qualityScore * 0.15
   );
+}
+
+function getMonday(date: Date) {
+  const result = new Date(date);
+  const currentDay = result.getDay();
+  const offset = currentDay === 0 ? -6 : 1 - currentDay;
+
+  result.setHours(0, 0, 0, 0);
+  result.setDate(result.getDate() + offset);
+
+  return result;
+}
+
+function getCurrentWeekDates() {
+  const monday = getMonday(new Date());
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return date;
+  });
+}
+
+function findCurrentTrainingWeek(weeks: TrainingWeek[]) {
+  const todayKey = dateKey(new Date());
+
+  return (
+    weeks.find(
+      (week) =>
+        todayKey >= week.weekStartingDate &&
+        todayKey <= week.weekEndingDate
+    ) || null
+  );
+}
+
+function getSessionTypeLabel(sessionType: string) {
+  const labels: Record<string, string> = {
+    recovery: "Recovery",
+    easy: "Easy",
+    steady: "Steady",
+    tempo: "Tempo",
+    threshold: "Threshold",
+    interval: "Intervals",
+    "marathon-pace": "Marathon pace",
+    "long-run": "Long run",
+    race: "Race",
+    rest: "Rest",
+    "cross-training": "Cross training",
+    other: "Session",
+  };
+
+  return labels[sessionType] || "Session";
+}
+
+function getSessionStatus(
+  session: PlannedSession | null,
+  matchedRuns: Run[],
+  isToday: boolean,
+  isFuture: boolean
+) {
+  if (matchedRuns.length > 0) return "Completed";
+  if (session?.isRestDay) return "Rest";
+  if (isToday) return "Today";
+  if (isFuture) return "Upcoming";
+  if (session) return "Not matched";
+  return "No plan";
 }
 
 function MetricCard({
@@ -280,114 +414,89 @@ function MetricCard({
   context: string;
 }) {
   return (
-    <div
-      style={{
-        padding: 20,
-        border: "1px solid rgba(148,163,184,0.22)",
-        borderRadius: 16,
-        background: "#ffffff",
-        boxShadow: "0 8px 24px rgba(15,23,42,0.05)",
-      }}
-    >
-      <p
-        style={{
-          margin: 0,
-          color: "#64748b",
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-        }}
-      >
-        {label}
-      </p>
-
-      <p
-        style={{
-          margin: "14px 0 7px",
-          color: "#0f172a",
-          fontSize: 30,
-          fontWeight: 800,
-          letterSpacing: "-0.04em",
-        }}
-      >
-        {value}
-      </p>
-
-      <p
-        style={{
-          margin: 0,
-          color: "#64748b",
-          fontSize: 12,
-        }}
-      >
-        {context}
-      </p>
-    </div>
+    <article className="surface-card metric-card">
+      <p className="metric-label">{label}</p>
+      <p className="metric-value">{value}</p>
+      <p className="metric-context">{context}</p>
+    </article>
   );
 }
 
 export default function HomePage() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [races, setRaces] = useState<RaceGoal[]>([]);
+  const [trainingWeeks, setTrainingWeeks] = useState<TrainingWeek[]>(
+    []
+  );
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [planWarning, setPlanWarning] = useState("");
 
   useEffect(() => {
-    async function loadData() {
+    async function loadDashboard() {
       try {
         setLoading(true);
         setLoadError("");
+        setPlanWarning("");
 
-        const [runsSnapshot, racesSnapshot] = await Promise.all([
-          getDocs(
-            query(
-              collection(db, "runs"),
-              orderBy("date", "desc")
-            )
-          ),
-          getDocs(
-            query(
-              collection(db, "raceGoals"),
-              orderBy("date", "asc")
-            )
-          ),
-        ]);
-
-        const loadedRuns: Run[] = runsSnapshot.docs.map(
-          (document) => {
-            const data = document.data();
-
-            return {
-              id: document.id,
-              date: data.date || "",
-              distance: String(data.distance || ""),
-              time: String(data.time || ""),
-              notes: data.notes || "",
-              runType: data.runType || "",
-              avgHr: String(data.avgHr || ""),
-              elevation: String(data.elevation || ""),
-              source: data.source || "",
-              name: data.name || "",
-              distanceMeters:
-                typeof data.distanceMeters === "number"
-                  ? data.distanceMeters
-                  : undefined,
-              movingTimeSeconds:
-                typeof data.movingTimeSeconds === "number"
-                  ? data.movingTimeSeconds
-                  : undefined,
-              paceSecondsPerKm:
-                typeof data.paceSecondsPerKm === "number"
-                  ? data.paceSecondsPerKm
-                  : null,
-              averageHeartrate:
-                typeof data.averageHeartrate === "number"
-                  ? data.averageHeartrate
-                  : null,
-            };
-          }
+        const runsRequest = getDocs(
+          query(collection(db, "runs"), orderBy("date", "desc"))
         );
+
+        const racesRequest = getDocs(
+          query(collection(db, "raceGoals"), orderBy("date", "asc"))
+        );
+
+        const planRequest = fetch("/api/training-plan", {
+          cache: "no-store",
+        }).then(async (response) => {
+          const result = (await response.json()) as TrainingPlanResponse;
+
+          if (!response.ok || !result.success) {
+            throw new Error(
+              result.error || "The coach training plan could not be loaded."
+            );
+          }
+
+          return result;
+        });
+
+        const [runsSnapshot, racesSnapshot, planResponse] =
+          await Promise.all([runsRequest, racesRequest, planRequest]);
+
+        const loadedRuns: Run[] = runsSnapshot.docs.map((document) => {
+          const data = document.data();
+
+          return {
+            id: document.id,
+            date: data.date || "",
+            distance: String(data.distance || ""),
+            time: String(data.time || ""),
+            runType: data.runType || "",
+            avgHr: String(data.avgHr || ""),
+            elevation: String(data.elevation || ""),
+            name: data.name || "",
+            notes: data.notes || "",
+            source: data.source || "",
+            distanceMeters:
+              typeof data.distanceMeters === "number"
+                ? data.distanceMeters
+                : undefined,
+            movingTimeSeconds:
+              typeof data.movingTimeSeconds === "number"
+                ? data.movingTimeSeconds
+                : undefined,
+            paceSecondsPerKm:
+              typeof data.paceSecondsPerKm === "number"
+                ? data.paceSecondsPerKm
+                : null,
+            averageHeartrate:
+              typeof data.averageHeartrate === "number"
+                ? data.averageHeartrate
+                : null,
+          };
+        });
 
         const loadedRaces: RaceGoal[] = racesSnapshot.docs.map(
           (document) => {
@@ -407,35 +516,77 @@ export default function HomePage() {
 
         setRuns(loadedRuns);
         setRaces(loadedRaces);
+        setTrainingWeeks(planResponse.weeks || []);
+
+        if (planResponse.warning) {
+          setPlanWarning(planResponse.warning);
+        }
       } catch (error) {
         setLoadError(
           error instanceof Error
             ? error.message
-            : "Unable to load Project Sub-3."
+            : "Project Sub-3 could not be loaded."
         );
       } finally {
         setLoading(false);
       }
     }
 
-    loadData();
+    loadDashboard();
   }, []);
 
-  const malagaRace = useMemo(
-    () => findMalagaRace(races),
-    [races]
+  const race = useMemo(() => findMalagaRace(races), [races]);
+
+  const currentTrainingWeek = useMemo(
+    () => findCurrentTrainingWeek(trainingWeeks),
+    [trainingWeeks]
   );
+
+  const todayKey = dateKey(new Date());
+
+  const todaySession =
+    currentTrainingWeek?.sessions.find(
+      (session) => session.plannedDate === todayKey
+    ) || null;
+
+  const currentWeekDates = useMemo(() => getCurrentWeekDates(), []);
+
+  const runsByDate = useMemo(() => {
+    const map = new Map<string, Run[]>();
+
+    runs.forEach((run) => {
+      const key = run.date.slice(0, 10);
+
+      if (!key) return;
+
+      const existingRuns = map.get(key) || [];
+      existingRuns.push(run);
+      map.set(key, existingRuns);
+    });
+
+    return map;
+  }, [runs]);
+
+  const sessionsByDate = useMemo(() => {
+    const map = new Map<string, PlannedSession>();
+
+    currentTrainingWeek?.sessions.forEach((session) => {
+      map.set(session.plannedDate, session);
+    });
+
+    return map;
+  }, [currentTrainingWeek]);
 
   const latestRun = runs[0] || null;
 
-  const recentRuns = runs.filter((run) => {
+  const recent28DayRuns = runs.filter((run) => {
     const daysAgo = getDaysAgo(run.date);
     return daysAgo >= 0 && daysAgo <= 28;
   });
 
   const weeklyMileage =
-    recentRuns.reduce(
-      (total, run) => total + getRunDistanceKm(run),
+    recent28DayRuns.reduce(
+      (sum, run) => sum + getRunDistanceKm(run),
       0
     ) / 4;
 
@@ -445,281 +596,253 @@ export default function HomePage() {
       return daysAgo >= 0 && daysAgo <= 42;
     })
     .reduce(
-      (maximum, run) =>
-        Math.max(maximum, getRunDistanceKm(run)),
+      (maximum, run) => Math.max(maximum, getRunDistanceKm(run)),
       0
     );
 
   const evidenceScore = calculateEvidenceScore(runs);
 
-  const targetTime =
-    malagaRace?.targetTime || DEFAULT_TARGET_TIME;
-
+  const targetTime = race?.targetTime || DEFAULT_TARGET_TIME;
   const targetSeconds =
     timeToSeconds(targetTime) ||
-    timeToSeconds(DEFAULT_TARGET_TIME)!;
+    timeToSeconds(DEFAULT_TARGET_TIME) ||
+    10799;
 
   const raceDistance =
-    Number.parseFloat(malagaRace?.distanceKm || "") ||
-    MALAGA_DISTANCE_KM;
+    Number.parseFloat(race?.distanceKm || "") ||
+    MARATHON_DISTANCE_KM;
 
-  const targetPace = formatPace(
-    targetSeconds / raceDistance
-  );
+  const targetPace = formatPace(targetSeconds / raceDistance);
 
-  const currentWeek = useMemo(() => {
-    const monday = getMonday(new Date());
+  const trainingWeekNumber = getTrainingWeekNumber();
 
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(monday);
-      date.setDate(monday.getDate() + index);
+  const completedPlannedSessions =
+    currentTrainingWeek?.sessions.filter((session) => {
+      if (session.isRestDay) return true;
 
-      const key = dateKey(date);
-      const dayRuns = runs.filter(
-        (run) => run.date.slice(0, 10) === key
-      );
+      return (runsByDate.get(session.plannedDate) || []).length > 0;
+    }).length || 0;
 
-      return {
-        date,
-        key,
-        runs: dayRuns,
-        isToday: key === dateKey(new Date()),
-      };
-    });
-  }, [runs]);
+  const plannedSessionCount =
+    currentTrainingWeek?.sessions.length || 0;
+
+  const completionPercentage =
+    plannedSessionCount > 0
+      ? Math.round(
+          (completedPlannedSessions / plannedSessionCount) * 100
+        )
+      : 0;
 
   if (loading) {
     return (
-      <main
-        style={{
-          minHeight: "70vh",
-          display: "grid",
-          placeItems: "center",
-          color: "#64748b",
-        }}
-      >
-        Loading Project Sub-3...
-      </main>
+      <div className="loading-state">
+        <div className="loading-spinner" />
+        <p>Loading Project Sub-3...</p>
+      </div>
     );
   }
 
   if (loadError) {
     return (
-      <main style={{ display: "grid", gap: 20 }}>
-        <section
-          style={{
-            padding: 28,
-            borderRadius: 20,
-            color: "#ffffff",
-            background: "#0f172a",
-          }}
-        >
-          <h1 style={{ marginTop: 0 }}>
-            Project Sub-3 could not load
-          </h1>
-          <p style={{ marginBottom: 0 }}>{loadError}</p>
-        </section>
-      </main>
+      <section className="dark-card error-card">
+        <p className="page-eyebrow">Project Sub-3</p>
+        <h1>Mission Control could not load</h1>
+        <p>{loadError}</p>
+      </section>
     );
   }
 
   return (
-    <main style={{ display: "grid", gap: 22 }}>
-      <section
-        style={{
-          padding: 30,
-          border: "1px solid rgba(96,165,250,0.18)",
-          borderRadius: 22,
-          color: "#ffffff",
-          background:
-            "radial-gradient(circle at 90% 0%, rgba(37,99,235,0.34), transparent 28rem), linear-gradient(135deg, #071421, #10243a)",
-          boxShadow: "0 22px 50px rgba(2,12,27,0.2)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 30,
-            flexWrap: "wrap",
-          }}
-        >
+    <div className="page-stack project-dashboard">
+      {planWarning && (
+        <div className="plan-warning">
+          <strong>Training-plan note:</strong> {planWarning}
+        </div>
+      )}
+
+      <section className="dark-card hero-card">
+        <div className="hero-main">
           <div>
-            <p
-              style={{
-                margin: 0,
-                color: "#60a5fa",
-                fontSize: 11,
-                fontWeight: 800,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
-              }}
-            >
-              Project Sub-3 · Malaga 2026
+            <p className="hero-kicker">
+              Project Sub-3 <span>/</span> Malaga 2026
             </p>
 
-            <h1
-              style={{
-                margin: "14px 0 12px",
-                fontSize: "clamp(38px, 6vw, 68px)",
-                lineHeight: 0.95,
-                letterSpacing: "-0.06em",
-              }}
-            >
-              The road to 2:59:59
-            </h1>
+            <h1>{race?.name || "Malaga Marathon"}</h1>
 
-            <p
-              style={{
-                maxWidth: 700,
-                margin: 0,
-                color: "#cbd5e1",
-                lineHeight: 1.7,
-              }}
-            >
-              Training plan, Strava execution and marathon
-              readiness brought together around one objective.
+            <p className="hero-description">
+              Sixteen weeks to execute the coach&apos;s plan, build
+              marathon-specific evidence and arrive ready to break three
+              hours.
             </p>
           </div>
 
-          <div
-            style={{
-              minWidth: 180,
-              padding: 18,
-              border: "1px solid rgba(148,163,184,0.18)",
-              borderRadius: 16,
-              background: "rgba(255,255,255,0.05)",
-            }}
-          >
-            <p
-              style={{
-                margin: 0,
-                color: "#94a3b8",
-                fontSize: 10,
-                fontWeight: 700,
-                textTransform: "uppercase",
-              }}
-            >
-              Race countdown
-            </p>
+          <div className="countdown-card">
+            <p>Race countdown</p>
 
-            <p
-              style={{
-                margin: "8px 0 4px",
-                fontSize: 48,
-                fontWeight: 800,
-                letterSpacing: "-0.06em",
-              }}
-            >
-              {malagaRace
-                ? getDaysToRace(malagaRace.date) ?? "—"
-                : "—"}
-            </p>
+            <div className="countdown-value">
+              <strong>
+                {race ? Math.max(0, getDaysToRace(race.date) || 0) : "—"}
+              </strong>
+              <span>days</span>
+            </div>
 
-            <p
-              style={{
-                margin: 0,
-                color: "#60a5fa",
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              days to Malaga
-            </p>
+            <small>
+              {race ? formatDisplayDate(race.date) : "Race date not set"}
+            </small>
           </div>
         </div>
 
-        <div
-          style={{
-            marginTop: 28,
-            paddingTop: 20,
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 24,
-            flexWrap: "wrap",
-            borderTop: "1px solid rgba(148,163,184,0.14)",
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: 0,
-                color: "#94a3b8",
-                fontSize: 10,
-                textTransform: "uppercase",
-              }}
+        <div className="hero-footer">
+          <div className="hero-status">
+            <span
+              className={`status-badge ${
+                evidenceScore >= 70
+                  ? "status-badge-success"
+                  : evidenceScore >= 50
+                  ? "status-badge-primary"
+                  : "status-badge-warning"
+              }`}
             >
-              Race
+              {evidenceScore >= 70
+                ? "On track"
+                : evidenceScore >= 50
+                ? "Building"
+                : "Evidence developing"}
+            </span>
+
+            <p>
+              Evidence score currently reflects consistency, mileage,
+              quality-session volume and recent long-run progression.
             </p>
-            <strong>{malagaRace?.name || "Malaga Marathon"}</strong>
           </div>
 
-          <div>
-            <p
-              style={{
-                margin: 0,
-                color: "#94a3b8",
-                fontSize: 10,
-                textTransform: "uppercase",
-              }}
-            >
-              Target
-            </p>
-            <strong>{targetTime}</strong>
-          </div>
+          <div className="target-summary">
+            <div>
+              <span>Target</span>
+              <strong>{targetTime}</strong>
+            </div>
 
-          <div>
-            <p
-              style={{
-                margin: 0,
-                color: "#94a3b8",
-                fontSize: 10,
-                textTransform: "uppercase",
-              }}
-            >
-              Target pace
-            </p>
-            <strong>{targetPace}</strong>
-          </div>
+            <div>
+              <span>Required pace</span>
+              <strong>{targetPace}</strong>
+            </div>
 
-          <div>
-            <p
-              style={{
-                margin: 0,
-                color: "#94a3b8",
-                fontSize: 10,
-                textTransform: "uppercase",
-              }}
-            >
-              Race date
-            </p>
-            <strong>
-              {malagaRace
-                ? formatDisplayDate(malagaRace.date)
-                : "Not configured"}
-            </strong>
+            <div>
+              <span>Training block</span>
+              <strong>
+                {trainingWeekNumber > 0
+                  ? `Week ${trainingWeekNumber} of 16`
+                  : "Starts Monday"}
+              </strong>
+            </div>
           </div>
         </div>
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "repeat(auto-fit, minmax(210px, 1fr))",
-          gap: 16,
-        }}
-      >
-        <MetricCard
-          label="Evidence for Sub-3"
-          value={`${evidenceScore}/100`}
-          context={
-            evidenceScore >= 70
-              ? "Strong foundations"
-              : "Evidence building"
-          }
-        />
+      <section className="headline-grid">
+        <div className="surface-card today-card">
+          <div className="section-header">
+            <div>
+              <p className="section-label">Coach plan</p>
+              <h2>Today&apos;s session</h2>
+            </div>
 
+            {todaySession && (
+              <span
+                className={`status-badge ${
+                  todaySession.isRestDay
+                    ? "status-badge-neutral"
+                    : todaySession.isKeySession
+                    ? "status-badge-warning"
+                    : "status-badge-primary"
+                }`}
+              >
+                {getSessionTypeLabel(todaySession.sessionType)}
+              </span>
+            )}
+          </div>
+
+          {todaySession ? (
+            <div className="today-session">
+              <h3>{todaySession.title}</h3>
+
+              {todaySession.distance.display && (
+                <p className="session-distance">
+                  {todaySession.distance.display}
+                </p>
+              )}
+
+              <div className="coach-instructions">
+                {todaySession.rawText
+                  .split("\n")
+                  .filter(Boolean)
+                  .map((line, index) => (
+                    <p key={`${line}-${index}`}>{line}</p>
+                  ))}
+              </div>
+
+              {todaySession.targetPaceText && (
+                <div className="session-target">
+                  <span>Target guidance</span>
+                  <strong>{todaySession.targetPaceText}</strong>
+                </div>
+              )}
+            </div>
+          ) : currentTrainingWeek ? (
+            <div className="empty-session">
+              <h3>Awaiting coach plan</h3>
+              <p>
+                The current training week exists in the Google Sheet, but
+                today&apos;s session has not yet been populated.
+              </p>
+            </div>
+          ) : (
+            <div className="empty-session">
+              <h3>No current week found</h3>
+              <p>
+                The training-plan API is connected, but no week currently
+                covers today&apos;s date.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="surface-card score-card">
+          <div className="section-header">
+            <div>
+              <p className="section-label">Headline metric</p>
+              <h2>Evidence for Sub-3</h2>
+            </div>
+          </div>
+
+          <div
+            className="score-ring"
+            style={{
+              background: `conic-gradient(
+                #2563eb 0deg,
+                #2563eb ${evidenceScore * 3.6}deg,
+                #e2e8f0 ${evidenceScore * 3.6}deg,
+                #e2e8f0 360deg
+              )`,
+            }}
+          >
+            <div>
+              <strong>{evidenceScore}</strong>
+              <span>/100</span>
+            </div>
+          </div>
+
+          <p className="score-summary">
+            {evidenceScore >= 75
+              ? "Strong foundations are in place."
+              : evidenceScore >= 55
+              ? "The evidence base is moving in the right direction."
+              : "The formal marathon block should strengthen this score."}
+          </p>
+        </div>
+      </section>
+
+      <section className="metrics-grid">
         <MetricCard
           label="Weekly mileage"
           value={`${weeklyMileage.toFixed(1)} km`}
@@ -733,266 +856,732 @@ export default function HomePage() {
         />
 
         <MetricCard
-          label="Recent consistency"
-          value={`${recentRuns.length} runs`}
-          context="Completed in the last 28 days"
+          label="Plan completion"
+          value={`${completionPercentage}%`}
+          context={
+            plannedSessionCount > 0
+              ? `${completedPlannedSessions} of ${plannedSessionCount} sessions or rest days`
+              : "Current week awaiting sessions"
+          }
+        />
+
+        <MetricCard
+          label="Recent runs"
+          value={String(recent28DayRuns.length)}
+          context="Activities completed in the last 28 days"
         />
       </section>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "minmax(0, 1.35fr) minmax(300px, 0.65fr)",
-          gap: 18,
-        }}
-      >
-        <div
-          style={{
-            padding: 22,
-            border: "1px solid rgba(148,163,184,0.22)",
-            borderRadius: 18,
-            background: "#ffffff",
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              color: "#2563eb",
-              fontSize: 11,
-              fontWeight: 800,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-            }}
-          >
-            This week
-          </p>
-
-          <h2 style={{ margin: "7px 0 18px" }}>
-            Training activity
-          </h2>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                "repeat(7, minmax(80px, 1fr))",
-              gap: 8,
-              overflowX: "auto",
-            }}
-          >
-            {currentWeek.map((day) => (
-              <div
-                key={day.key}
-                style={{
-                  minWidth: 82,
-                  minHeight: 130,
-                  padding: 12,
-                  border: day.isToday
-                    ? "1px solid #2563eb"
-                    : "1px solid #e2e8f0",
-                  borderRadius: 12,
-                  background: day.isToday
-                    ? "#eff6ff"
-                    : "#f8fafc",
-                }}
-              >
-                <p
-                  style={{
-                    margin: 0,
-                    color: "#64748b",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {day.date.toLocaleDateString("en-GB", {
-                    weekday: "short",
-                  })}
-                </p>
-
-                <p
-                  style={{
-                    margin: "7px 0 12px",
-                    fontSize: 23,
-                    fontWeight: 800,
-                  }}
-                >
-                  {day.date.getDate()}
-                </p>
-
-                <p
-                  style={{
-                    margin: 0,
-                    color:
-                      day.runs.length > 0 ? "#16a34a" : "#64748b",
-                    fontSize: 10,
-                    fontWeight: 700,
-                  }}
-                >
-                  {day.runs.length > 0
-                    ? "Completed"
-                    : day.isToday
-                    ? "Today"
-                    : "No activity"}
-                </p>
-
-                {day.runs[0] && (
-                  <p
-                    style={{
-                      margin: "8px 0 0",
-                      fontSize: 10,
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    {day.runs[0].name ||
-                      day.runs[0].runType ||
-                      "Run"}
-                  </p>
-                )}
-              </div>
-            ))}
+      <section className="surface-card week-card">
+        <div className="section-header">
+          <div>
+            <p className="section-label">Coach plan versus Strava</p>
+            <h2>This week</h2>
           </div>
+
+          <span className="status-badge status-badge-neutral">
+            {currentTrainingWeek?.phase ||
+              (trainingWeekNumber > 0
+                ? `Week ${trainingWeekNumber}`
+                : "Pre-block")}
+          </span>
         </div>
 
-        <div
-          style={{
-            padding: 22,
-            border: "1px solid rgba(148,163,184,0.22)",
-            borderRadius: 18,
-            background: "#ffffff",
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              color: "#2563eb",
-              fontSize: 11,
-              fontWeight: 800,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-            }}
-          >
-            Today&apos;s plan
-          </p>
+        <div className="week-grid">
+          {currentWeekDates.map((date) => {
+            const key = dateKey(date);
+            const plannedSession = sessionsByDate.get(key) || null;
+            const dayRuns = runsByDate.get(key) || [];
 
-          <h2 style={{ margin: "7px 0 14px" }}>
-            Coach connection next
-          </h2>
+            const isToday = key === todayKey;
+            const isFuture = date > startOfToday();
 
-          <p
-            style={{
-              color: "#64748b",
-              lineHeight: 1.7,
-            }}
-          >
-            This panel will pull today&apos;s prescribed
-            session, distance, pace guidance and coach notes
-            directly from the Google Sheet.
-          </p>
+            const status = getSessionStatus(
+              plannedSession,
+              dayRuns,
+              isToday,
+              isFuture
+            );
 
-          <Link
-            href="/runs"
-            style={{
-              marginTop: 14,
-              minHeight: 42,
-              padding: "0 15px",
-              display: "inline-flex",
-              alignItems: "center",
-              borderRadius: 10,
-              color: "#ffffff",
-              background: "#2563eb",
-              fontSize: 13,
-              fontWeight: 700,
-              textDecoration: "none",
-            }}
-          >
+            return (
+              <article
+                key={key}
+                className={`week-day ${isToday ? "week-day-today" : ""}`}
+              >
+                <div className="week-day-heading">
+                  <span>
+                    {date.toLocaleDateString("en-GB", {
+                      weekday: "short",
+                    })}
+                  </span>
+
+                  <strong>{date.getDate()}</strong>
+                </div>
+
+                <div
+                  className={`day-status ${
+                    status === "Completed"
+                      ? "day-status-completed"
+                      : status === "Today"
+                      ? "day-status-today"
+                      : status === "Rest"
+                      ? "day-status-rest"
+                      : ""
+                  }`}
+                >
+                  <i />
+                  {status}
+                </div>
+
+                <p className="planned-title">
+                  {plannedSession
+                    ? plannedSession.title
+                    : "Awaiting plan"}
+                </p>
+
+                {plannedSession?.distance.display && (
+                  <small>{plannedSession.distance.display}</small>
+                )}
+
+                {dayRuns.length > 0 && (
+                  <div className="completed-run">
+                    <span>Strava</span>
+                    <strong>
+                      {dayRuns
+                        .reduce(
+                          (sum, run) => sum + getRunDistanceKm(run),
+                          0
+                        )
+                        .toFixed(1)}{" "}
+                      km
+                    </strong>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="surface-card latest-card">
+        <div className="section-header">
+          <div>
+            <p className="section-label">Most recent activity</p>
+            <h2>Latest Strava run</h2>
+          </div>
+
+          <Link href="/runs" className="ghost-button">
             Open training log
           </Link>
         </div>
-      </section>
-
-      <section
-        style={{
-          padding: 22,
-          border: "1px solid rgba(148,163,184,0.22)",
-          borderRadius: 18,
-          background: "#ffffff",
-        }}
-      >
-        <p
-          style={{
-            margin: 0,
-            color: "#2563eb",
-            fontSize: 11,
-            fontWeight: 800,
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-          }}
-        >
-          Latest Strava activity
-        </p>
-
-        <h2 style={{ margin: "7px 0 18px" }}>
-          {latestRun?.name ||
-            latestRun?.runType ||
-            "No run available"}
-        </h2>
 
         {latestRun ? (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: 12,
-            }}
-          >
-            <MetricCard
-              label="Date"
-              value={formatDisplayDate(latestRun.date)}
-              context={latestRun.source || "Saved activity"}
-            />
+          <div className="latest-layout">
+            <div className="latest-heading">
+              <span className="status-badge status-badge-primary">
+                {latestRun.runType || "Run"}
+              </span>
 
-            <MetricCard
-              label="Distance"
-              value={`${getRunDistanceKm(latestRun).toFixed(
-                2
-              )} km`}
-              context={latestRun.runType || "Run"}
-            />
+              <h3>{latestRun.name || "Completed run"}</h3>
+              <p>{formatDisplayDate(latestRun.date)}</p>
+            </div>
 
-            <MetricCard
-              label="Time"
-              value={secondsToTime(
-                getRunTimeSeconds(latestRun)
-              )}
-              context="Moving time"
-            />
+            <div className="latest-stats">
+              <div>
+                <span>Distance</span>
+                <strong>{getRunDistanceKm(latestRun).toFixed(2)} km</strong>
+              </div>
 
-            <MetricCard
-              label="Average pace"
-              value={formatPace(
-                getRunPaceSeconds(latestRun)
-              )}
-              context={
-                latestRun.averageHeartrate ||
-                latestRun.avgHr
-                  ? `Average HR ${
-                      latestRun.averageHeartrate ||
-                      latestRun.avgHr
-                    }`
-                  : "Heart rate unavailable"
-              }
-            />
+              <div>
+                <span>Time</span>
+                <strong>
+                  {secondsToTime(getRunTimeSeconds(latestRun))}
+                </strong>
+              </div>
+
+              <div>
+                <span>Pace</span>
+                <strong>
+                  {formatPace(getRunPaceSeconds(latestRun))}
+                </strong>
+              </div>
+
+              <div>
+                <span>Average HR</span>
+                <strong>
+                  {latestRun.averageHeartrate ||
+                    latestRun.avgHr ||
+                    "N/A"}
+                </strong>
+              </div>
+            </div>
           </div>
         ) : (
-          <p style={{ color: "#64748b" }}>
-            No run data is available. Open Training and sync
-            Strava.
-          </p>
+          <div className="empty-session">
+            <p>No Strava run data is currently available.</p>
+          </div>
         )}
       </section>
-    </main>
+
+      <style jsx>{`
+        .project-dashboard {
+          gap: 20px;
+        }
+
+        .loading-state {
+          min-height: 65vh;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          gap: 14px;
+          color: var(--colour-slate-500);
+        }
+
+        .loading-state p {
+          margin: 0;
+        }
+
+        .loading-spinner {
+          width: 34px;
+          height: 34px;
+          border: 3px solid var(--colour-slate-200);
+          border-top-color: var(--colour-blue-600);
+          border-radius: 999px;
+          animation: spin 800ms linear infinite;
+        }
+
+        .error-card {
+          min-height: 320px;
+          padding: 36px;
+          display: grid;
+          align-content: center;
+        }
+
+        .error-card h1 {
+          margin: 8px 0 12px;
+          font-size: 40px;
+        }
+
+        .error-card p:last-child {
+          max-width: 700px;
+          margin: 0;
+          color: var(--colour-slate-300);
+        }
+
+        .plan-warning {
+          padding: 13px 15px;
+          color: #92400e;
+          border: 1px solid #fde68a;
+          border-radius: 11px;
+          background: #fffbeb;
+          font-size: 12px;
+        }
+
+        .hero-card {
+          padding: clamp(24px, 3vw, 36px);
+        }
+
+        .hero-main {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 32px;
+        }
+
+        .hero-kicker {
+          margin: 0;
+          color: var(--colour-blue-400);
+          font-size: 11px;
+          font-weight: 780;
+          letter-spacing: 0.13em;
+          text-transform: uppercase;
+        }
+
+        .hero-kicker span {
+          margin: 0 7px;
+          color: var(--colour-slate-500);
+        }
+
+        .hero-card h1 {
+          margin: 15px 0 0;
+          color: #ffffff;
+          font-size: clamp(38px, 6vw, 66px);
+          font-weight: 790;
+          letter-spacing: -0.06em;
+          line-height: 0.98;
+        }
+
+        .hero-description {
+          max-width: 700px;
+          margin: 17px 0 0;
+          color: var(--colour-slate-300);
+          line-height: 1.7;
+        }
+
+        .countdown-card {
+          min-width: 190px;
+          padding: 19px;
+          border: 1px solid rgba(96, 165, 250, 0.24);
+          border-radius: 15px;
+          background: rgba(255, 255, 255, 0.045);
+        }
+
+        .countdown-card > p {
+          margin: 0;
+          color: var(--colour-slate-400);
+          font-size: 10px;
+          font-weight: 760;
+          letter-spacing: 0.09em;
+          text-transform: uppercase;
+        }
+
+        .countdown-value {
+          margin-top: 9px;
+          display: flex;
+          align-items: flex-end;
+          gap: 8px;
+        }
+
+        .countdown-value strong {
+          color: #ffffff;
+          font-size: 52px;
+          letter-spacing: -0.065em;
+          line-height: 0.95;
+        }
+
+        .countdown-value span {
+          padding-bottom: 6px;
+          color: var(--colour-blue-400);
+          font-size: 11px;
+          font-weight: 750;
+          text-transform: uppercase;
+        }
+
+        .countdown-card small {
+          margin-top: 12px;
+          display: block;
+          color: var(--colour-slate-400);
+        }
+
+        .hero-footer {
+          margin-top: 28px;
+          padding-top: 22px;
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 24px;
+          border-top: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .hero-status {
+          max-width: 650px;
+        }
+
+        .hero-status p {
+          margin: 11px 0 0;
+          color: var(--colour-slate-300);
+          line-height: 1.6;
+        }
+
+        .target-summary {
+          display: flex;
+          gap: 30px;
+          text-align: right;
+        }
+
+        .target-summary span {
+          display: block;
+          color: var(--colour-slate-400);
+          font-size: 9px;
+          font-weight: 740;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .target-summary strong {
+          margin-top: 5px;
+          display: block;
+          color: #ffffff;
+          font-size: 16px;
+        }
+
+        .headline-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+          gap: 20px;
+        }
+
+        .today-card,
+        .score-card,
+        .week-card,
+        .latest-card {
+          padding: 22px;
+        }
+
+        .section-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        .section-header h2 {
+          margin: 5px 0 0;
+          color: var(--colour-slate-950);
+          font-size: 20px;
+          font-weight: 730;
+          letter-spacing: -0.025em;
+        }
+
+        .today-session,
+        .empty-session {
+          margin-top: 24px;
+        }
+
+        .today-session h3,
+        .empty-session h3 {
+          margin: 0;
+          color: var(--colour-slate-950);
+          font-size: clamp(25px, 4vw, 37px);
+          font-weight: 760;
+          letter-spacing: -0.045em;
+        }
+
+        .session-distance {
+          margin: 8px 0 0;
+          color: var(--colour-blue-600);
+          font-size: 18px;
+          font-weight: 730;
+        }
+
+        .coach-instructions {
+          margin-top: 20px;
+          padding: 17px;
+          border-radius: 13px;
+          background: var(--colour-slate-50);
+        }
+
+        .coach-instructions p {
+          margin: 0 0 6px;
+          color: var(--colour-slate-700);
+        }
+
+        .coach-instructions p:last-child {
+          margin-bottom: 0;
+        }
+
+        .session-target {
+          margin-top: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+        }
+
+        .session-target span {
+          color: var(--colour-slate-500);
+          font-size: 10px;
+          font-weight: 730;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .session-target strong {
+          color: var(--colour-slate-950);
+        }
+
+        .empty-session p {
+          max-width: 650px;
+          margin: 11px 0 0;
+          color: var(--colour-slate-600);
+          line-height: 1.65;
+        }
+
+        .score-card {
+          display: grid;
+          align-content: start;
+          justify-items: center;
+        }
+
+        .score-card .section-header {
+          width: 100%;
+        }
+
+        .score-ring {
+          width: 168px;
+          height: 168px;
+          margin-top: 25px;
+          padding: 12px;
+          display: grid;
+          place-items: center;
+          border-radius: 999px;
+        }
+
+        .score-ring > div {
+          width: 100%;
+          height: 100%;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          border-radius: 999px;
+          background: #ffffff;
+        }
+
+        .score-ring strong {
+          color: var(--colour-slate-950);
+          font-size: 52px;
+          letter-spacing: -0.065em;
+          line-height: 0.9;
+        }
+
+        .score-ring span {
+          margin-top: 8px;
+          color: var(--colour-slate-500);
+          font-size: 11px;
+          font-weight: 680;
+        }
+
+        .score-summary {
+          max-width: 270px;
+          margin: 20px 0 0;
+          color: var(--colour-slate-600);
+          text-align: center;
+          line-height: 1.6;
+        }
+
+        .metrics-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 16px;
+        }
+
+        .metric-card {
+          min-height: 142px;
+          padding: 20px;
+        }
+
+        .metric-card .metric-value {
+          margin: 17px 0 8px;
+        }
+
+        .week-grid {
+          margin-top: 21px;
+          display: grid;
+          grid-template-columns: repeat(7, minmax(0, 1fr));
+          gap: 9px;
+        }
+
+        .week-day {
+          min-height: 190px;
+          padding: 13px;
+          border: 1px solid var(--colour-border);
+          border-radius: 13px;
+          background: var(--colour-slate-50);
+        }
+
+        .week-day-today {
+          border-color: rgba(37, 99, 235, 0.48);
+          background: var(--colour-blue-50);
+        }
+
+        .week-day-heading {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+        }
+
+        .week-day-heading span {
+          color: var(--colour-slate-500);
+          font-size: 10px;
+          font-weight: 760;
+          letter-spacing: 0.07em;
+          text-transform: uppercase;
+        }
+
+        .week-day-heading strong {
+          color: var(--colour-slate-950);
+          font-size: 22px;
+        }
+
+        .day-status {
+          margin-top: 15px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: var(--colour-slate-500);
+          font-size: 9px;
+          font-weight: 690;
+          text-transform: uppercase;
+        }
+
+        .day-status i {
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: var(--colour-slate-300);
+        }
+
+        .day-status-completed i {
+          background: var(--colour-success-500);
+        }
+
+        .day-status-today i {
+          background: var(--colour-blue-600);
+        }
+
+        .day-status-rest i {
+          background: var(--colour-slate-500);
+        }
+
+        .planned-title {
+          margin: 13px 0 0;
+          color: var(--colour-slate-950);
+          font-size: 11px;
+          font-weight: 680;
+          line-height: 1.4;
+        }
+
+        .week-day small {
+          margin-top: 5px;
+          display: block;
+          color: var(--colour-slate-500);
+        }
+
+        .completed-run {
+          margin-top: 15px;
+          padding-top: 11px;
+          border-top: 1px solid var(--colour-border);
+        }
+
+        .completed-run span {
+          display: block;
+          color: var(--colour-success-600);
+          font-size: 9px;
+          font-weight: 730;
+          text-transform: uppercase;
+        }
+
+        .completed-run strong {
+          margin-top: 4px;
+          display: block;
+          color: var(--colour-slate-950);
+          font-size: 12px;
+        }
+
+        .latest-layout {
+          margin-top: 21px;
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
+          gap: 25px;
+          align-items: end;
+        }
+
+        .latest-heading h3 {
+          margin: 13px 0 0;
+          color: var(--colour-slate-950);
+          font-size: 24px;
+          letter-spacing: -0.035em;
+        }
+
+        .latest-heading p {
+          margin: 5px 0 0;
+          color: var(--colour-slate-500);
+        }
+
+        .latest-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .latest-stats div {
+          padding: 14px;
+          border-radius: 11px;
+          background: var(--colour-slate-50);
+        }
+
+        .latest-stats span {
+          display: block;
+          color: var(--colour-slate-500);
+          font-size: 9px;
+          font-weight: 730;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+        }
+
+        .latest-stats strong {
+          margin-top: 6px;
+          display: block;
+          color: var(--colour-slate-950);
+          font-size: 14px;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @media (max-width: 1180px) {
+          .metrics-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .week-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 900px) {
+          .headline-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .hero-main {
+            grid-template-columns: 1fr;
+          }
+
+          .countdown-card {
+            max-width: 240px;
+          }
+
+          .hero-footer {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .target-summary {
+            width: 100%;
+            justify-content: space-between;
+            text-align: left;
+          }
+        }
+
+        @media (max-width: 680px) {
+          .week-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .latest-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .latest-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .target-summary {
+            flex-direction: column;
+            gap: 15px;
+          }
+        }
+
+        @media (max-width: 460px) {
+          .metrics-grid,
+          .latest-stats {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
+    </div>
   );
 }
