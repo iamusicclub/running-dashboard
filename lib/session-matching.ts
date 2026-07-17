@@ -998,7 +998,7 @@ export function matchSessionToRuns(
       completedDistanceKm,
       components: [
         {
-          key: "recovery",
+          key: "session-type",
           label: "Recovery compliance",
           available: true,
           score: restScore,
