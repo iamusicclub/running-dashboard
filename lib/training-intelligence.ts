@@ -337,7 +337,7 @@ function getDueMatches(
 ) {
   return matches.filter(
     (match) =>
-      match.status !== "not-due"
+      match.status !== "upcoming"
   );
 }
 
@@ -412,7 +412,7 @@ function calculateRestScore(
   const restMatches = matches.filter(
     (match) =>
       restIds.has(match.sessionId) &&
-      match.status !== "not-due"
+      match.status !== "upcoming"
   );
 
   if (restMatches.length === 0) {
