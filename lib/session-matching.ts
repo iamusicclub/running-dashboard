@@ -1273,7 +1273,7 @@ export function calculateWeekExecution(
       matches.filter(
         (match) =>
           match.status ===
-            "upcoming
+            "upcoming"
       ).length,
     unverifiedCount:
       matches.filter(
