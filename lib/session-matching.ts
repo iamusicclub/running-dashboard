@@ -81,13 +81,16 @@ export type SessionMatchResult = {
   score: number | null;
   verdict: string;
   detail: string;
+
   plannedSession: MatchablePlannedSession;
   matchedRuns: MatchableRun[];
   matchedRunIds: string[];
+
   completedDistanceKm: number;
   plannedMinimumDistanceKm: number | null;
   plannedMaximumDistanceKm: number | null;
   distanceDifferenceKm: number | null;
+
   components: SessionMatchComponent[];
 };
 
@@ -99,39 +102,36 @@ export type WeekExecution = {
   missedCount: number;
   restCount: number;
   upcomingCount: number;
+  unverifiedCount: number;
   completionPercentage: number;
   averageExecutionScore: number | null;
 };
 
 type PaceRange = {
-  minimumSecondsPerKm: number;
-  maximumSecondsPerKm: number;
+  fastestSecondsPerKm: number;
+  slowestSecondsPerKm: number;
 };
 
-const DAY_IN_MILLISECONDS = 86_400_000;
+const MS_PER_DAY = 86_400_000;
 
 function clamp(value: number, minimum = 0, maximum = 100) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function round(value: number, decimals = 0) {
-  const multiplier = 10 ** decimals;
-
+function round(value: number, decimalPlaces = 0) {
+  const multiplier = 10 ** decimalPlaces;
   return Math.round(value * multiplier) / multiplier;
 }
 
-function parseDate(value: string) {
-  if (!value) {
-    return null;
-  }
-
-  const cleanValue = value.slice(0, 10);
-  const parsed = new Date(`${cleanValue}T12:00:00`);
-
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+function normaliseText(value: string | null | undefined) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function todayDateKey() {
+function getTodayDateKey() {
   const today = new Date();
 
   return [
@@ -142,10 +142,10 @@ function todayDateKey() {
 }
 
 function getRunDateKey(run: MatchableRun) {
-  return run.date ? run.date.slice(0, 10) : "";
+  return run.date?.slice(0, 10) ?? "";
 }
 
-function timeToSeconds(value: string) {
+function parseTimeToSeconds(value: string) {
   if (!value) {
     return null;
   }
@@ -167,11 +167,7 @@ function timeToSeconds(value: string) {
     return parts[0] * 60 + parts[1];
   }
 
-  return (
-    parts[0] * 3600 +
-    parts[1] * 60 +
-    parts[2]
-  );
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
 function getRunDistanceKm(run: MatchableRun) {
@@ -183,10 +179,10 @@ function getRunDistanceKm(run: MatchableRun) {
     return run.distanceMeters / 1000;
   }
 
-  const parsed = Number.parseFloat(run.distance || "");
+  const parsedDistance = Number.parseFloat(run.distance ?? "");
 
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
+  return Number.isFinite(parsedDistance) && parsedDistance > 0
+    ? parsedDistance
     : 0;
 }
 
@@ -199,7 +195,7 @@ function getRunTimeSeconds(run: MatchableRun) {
     return run.movingTimeSeconds;
   }
 
-  return timeToSeconds(run.time) || 0;
+  return parseTimeToSeconds(run.time) ?? 0;
 }
 
 function getRunPaceSecondsPerKm(run: MatchableRun) {
@@ -222,12 +218,22 @@ function getRunPaceSecondsPerKm(run: MatchableRun) {
 }
 
 function getWeightedAveragePace(runs: MatchableRun[]) {
-  const totalDistanceKm = runs.reduce(
+  const usableRuns = runs.filter(
+    (run) =>
+      getRunDistanceKm(run) > 0 &&
+      getRunTimeSeconds(run) > 0
+  );
+
+  if (usableRuns.length === 0) {
+    return null;
+  }
+
+  const totalDistanceKm = usableRuns.reduce(
     (sum, run) => sum + getRunDistanceKm(run),
     0
   );
 
-  const totalTimeSeconds = runs.reduce(
+  const totalTimeSeconds = usableRuns.reduce(
     (sum, run) => sum + getRunTimeSeconds(run),
     0
   );
@@ -239,322 +245,290 @@ function getWeightedAveragePace(runs: MatchableRun[]) {
   return totalTimeSeconds / totalDistanceKm;
 }
 
-function clampScore(value: number) {
-  return Math.max(0, Math.min(100, Math.round(value)));
+function formatDistance(distanceKm: number) {
+  return `${round(distanceKm, 1).toFixed(1)} km`;
 }
 
-function normaliseText(value: string | null | undefined) {
-  return (value || "")
-    .toLowerCase()
-    .replace(/[_–—-]+/g, " ")
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function formatPace(secondsPerKm: number) {
+  const roundedSeconds = Math.round(secondsPerKm);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}/km`;
 }
 
-function getRunTypeText(run: MatchableRun) {
-  return normaliseText(
-    [
-      run.runType,
-      run.name,
-      run.notes,
-    ]
+function normaliseSessionType(value: string) {
+  const text = normaliseText(value);
+
+  if (!text) {
+    return "other";
+  }
+
+  if (text.includes("rest")) {
+    return "rest";
+  }
+
+  if (
+    text.includes("interval") ||
+    text.includes("repetition") ||
+    text.includes("reps") ||
+    text.includes("vo2")
+  ) {
+    return "interval";
+  }
+
+  if (text.includes("threshold")) {
+    return "threshold";
+  }
+
+  if (text.includes("tempo")) {
+    return "tempo";
+  }
+
+  if (
+    text.includes("marathon pace") ||
+    text === "mp" ||
+    text.includes("race pace")
+  ) {
+    return "marathon-pace";
+  }
+
+  if (text.includes("long")) {
+    return "long-run";
+  }
+
+  if (text.includes("recovery")) {
+    return "recovery";
+  }
+
+  if (
+    text.includes("progressive") ||
+    text.includes("progression") ||
+    text.includes("steady")
+  ) {
+    return "steady";
+  }
+
+  if (
+    text.includes("easy") ||
+    text.includes("aerobic")
+  ) {
+    return "easy";
+  }
+
+  if (
+    text.includes("race") ||
+    text.includes("parkrun")
+  ) {
+    return "race";
+  }
+
+  if (
+    text.includes("cross") ||
+    text.includes("bike") ||
+    text.includes("cycle") ||
+    text.includes("swim")
+  ) {
+    return "cross-training";
+  }
+
+  return text;
+}
+
+function classifyRun(run: MatchableRun) {
+  const text = normaliseText(
+    [run.runType, run.name, run.notes]
       .filter(Boolean)
       .join(" ")
   );
-}
-
-function getExpectedRunTypeTerms(sessionType: string) {
-  const normalisedType = normaliseText(sessionType);
-
-  const termsByType: Record<string, string[]> = {
-    easy: [
-      "easy",
-      "aerobic",
-      "recovery",
-      "general",
-    ],
-    recovery: [
-      "recovery",
-      "easy",
-      "shakeout",
-    ],
-    steady: [
-      "steady",
-      "aerobic",
-      "moderate",
-    ],
-    tempo: [
-      "tempo",
-      "threshold",
-      "controlled",
-      "progression",
-    ],
-    threshold: [
-      "threshold",
-      "tempo",
-      "cruise",
-      "interval",
-    ],
-    interval: [
-      "interval",
-      "repetition",
-      "reps",
-      "track",
-      "speed",
-      "vo2",
-    ],
-    "marathon pace": [
-      "marathon pace",
-      "marathon",
-      "mp",
-      "race pace",
-    ],
-    "marathon-pace": [
-      "marathon pace",
-      "marathon",
-      "mp",
-      "race pace",
-    ],
-    "long run": [
-      "long run",
-      "long",
-      "endurance",
-    ],
-    "long-run": [
-      "long run",
-      "long",
-      "endurance",
-    ],
-    race: [
-      "race",
-      "parkrun",
-      "time trial",
-      "competition",
-    ],
-    "cross training": [
-      "cross training",
-      "cycling",
-      "bike",
-      "swim",
-      "elliptical",
-    ],
-    "cross-training": [
-      "cross training",
-      "cycling",
-      "bike",
-      "swim",
-      "elliptical",
-    ],
-  };
-
-  return termsByType[normalisedType] || [
-    normalisedType,
-  ];
-}
-
-function calculateSessionTypeScore(
-  session: MatchablePlannedSession,
-  runs: MatchableRun[]
-) {
-  if (session.isRestDay) {
-    return runs.length === 0 ? 100 : 20;
-  }
-
-  if (runs.length === 0) {
-    return 0;
-  }
-
-  const expectedTerms = getExpectedRunTypeTerms(
-    session.sessionType
-  );
-
-  const combinedRunText = runs
-    .map(getRunTypeText)
-    .join(" ");
 
   if (
-    expectedTerms.some(
-      (term) =>
-        term &&
-        combinedRunText.includes(
-          normaliseText(term)
-        )
+    /\b(race|parkrun|time trial)\b/.test(text)
+  ) {
+    return "race";
+  }
+
+  if (
+    /\b(interval|repetition|reps|track|vo2|400m|600m|800m|1k reps)\b/.test(
+      text
     )
   ) {
-    return 100;
+    return "interval";
   }
 
-  const plannedType = normaliseText(
-    session.sessionType
-  );
+  if (/\bthreshold\b/.test(text)) {
+    return "threshold";
+  }
 
-  if (
-    plannedType === "easy" ||
-    plannedType === "recovery"
-  ) {
-    return 75;
+  if (/\btempo\b/.test(text)) {
+    return "tempo";
   }
 
   if (
-    plannedType === "long run" ||
-    plannedType === "long-run"
+    /\b(marathon pace|race pace|\bmp\b)\b/.test(text)
   ) {
-    const totalDistance = runs.reduce(
-      (sum, run) =>
-        sum + getRunDistanceKm(run),
-      0
-    );
-
-    if (totalDistance >= 18) {
-      return 85;
-    }
-
-    if (totalDistance >= 14) {
-      return 65;
-    }
+    return "marathon-pace";
   }
 
-  return 50;
+  if (
+    /\b(long run|long-run|lsr)\b/.test(text) ||
+    getRunDistanceKm(run) >= 18
+  ) {
+    return "long-run";
+  }
+
+  if (/\brecovery\b/.test(text)) {
+    return "recovery";
+  }
+
+  if (
+    /\b(progressive|progression|steady)\b/.test(text)
+  ) {
+    return "steady";
+  }
+
+  if (/\b(easy|aerobic)\b/.test(text)) {
+    return "easy";
+  }
+
+  if (
+    /\b(cross training|bike|cycle|swim)\b/.test(text)
+  ) {
+    return "cross-training";
+  }
+
+  return normaliseSessionType(run.runType);
 }
 
-function calculateDistanceScore(
+function sessionTypesAreCompatible(
+  plannedType: string,
+  actualType: string
+) {
+  if (plannedType === actualType) {
+    return true;
+  }
+
+  const compatibleGroups = [
+    ["easy", "recovery"],
+    ["tempo", "threshold"],
+    ["steady", "marathon-pace"],
+    ["race", "tempo", "threshold"],
+  ];
+
+  return compatibleGroups.some(
+    (group) =>
+      group.includes(plannedType) &&
+      group.includes(actualType)
+  );
+}
+
+function scoreDistance(
   session: MatchablePlannedSession,
   completedDistanceKm: number
-) {
-  const minimumKm =
-    session.distance.minimumKm;
+): SessionMatchComponent {
+  const minimumKm = session.distance.minimumKm;
+  const maximumKm = session.distance.maximumKm;
 
-  const maximumKm =
-    session.distance.maximumKm;
-
-  if (
-    minimumKm === null &&
-    maximumKm === null
-  ) {
+  if (minimumKm === null && maximumKm === null) {
     return {
+      key: "distance",
+      label: "Distance",
+      score: 0,
       available: false,
-      score: 100,
       explanation:
         "No numerical distance target was available.",
     };
   }
 
-  const targetMinimum =
-    minimumKm ?? maximumKm ?? 0;
-
-  const targetMaximum =
-    maximumKm ?? minimumKm ?? 0;
-
   if (completedDistanceKm <= 0) {
     return {
-      available: true,
+      key: "distance",
+      label: "Distance",
       score: 0,
-      explanation:
-        "No completed distance was detected.",
+      available: true,
+      explanation: "No completed distance was recorded.",
     };
   }
+
+  const lowerBound = minimumKm ?? maximumKm ?? 0;
+  const upperBound = maximumKm ?? minimumKm ?? lowerBound;
 
   if (
-    completedDistanceKm >= targetMinimum &&
-    completedDistanceKm <= targetMaximum
+    completedDistanceKm >= lowerBound &&
+    completedDistanceKm <= upperBound
   ) {
     return {
-      available: true,
+      key: "distance",
+      label: "Distance",
       score: 100,
-      explanation: `${completedDistanceKm.toFixed(
-        1
-      )} km completed against a planned range of ${targetMinimum.toFixed(
-        1
-      )}–${targetMaximum.toFixed(1)} km.`,
+      available: true,
+      explanation: `${formatDistance(
+        completedDistanceKm
+      )} was within the planned range.`,
     };
   }
 
-  if (completedDistanceKm < targetMinimum) {
-    const shortfall =
-      targetMinimum - completedDistanceKm;
-
-    const percentage =
-      targetMinimum > 0
-        ? completedDistanceKm /
-          targetMinimum
+  if (completedDistanceKm < lowerBound) {
+    const completionRatio =
+      lowerBound > 0
+        ? completedDistanceKm / lowerBound
         : 0;
 
     return {
+      key: "distance",
+      label: "Distance",
+      score: Math.round(clamp(completionRatio * 100)),
       available: true,
-      score: clampScore(
-        percentage * 100
-      ),
-      explanation: `${completedDistanceKm.toFixed(
-        1
-      )} km completed, ${shortfall.toFixed(
-        1
-      )} km below the minimum planned distance.`,
+      explanation: `${formatDistance(
+        completedDistanceKm
+      )} was ${formatDistance(
+        lowerBound - completedDistanceKm
+      )} below the planned minimum.`,
     };
   }
 
-  const excess =
-    completedDistanceKm - targetMaximum;
-
-  const excessPercentage =
-    targetMaximum > 0
-      ? excess / targetMaximum
-      : 0;
-
-  const score = clampScore(
-    100 - excessPercentage * 60
-  );
+  const excessKm = completedDistanceKm - upperBound;
+  const excessRatio =
+    upperBound > 0 ? excessKm / upperBound : 0;
 
   return {
+    key: "distance",
+    label: "Distance",
+    score: Math.round(clamp(100 - excessRatio * 60, 40, 100)),
     available: true,
-    score,
-    explanation: `${completedDistanceKm.toFixed(
-      1
-    )} km completed, ${excess.toFixed(
-      1
-    )} km above the maximum planned distance.`,
+    explanation: `${formatDistance(
+      completedDistanceKm
+    )} was ${formatDistance(
+      excessKm
+    )} above the planned maximum.`,
   };
 }
 
-function paceStringToSeconds(
-  value: string
-) {
-  const match = value.match(
-    /(\d{1,2}):(\d{2})/
-  );
-
-  if (!match) {
-    return null;
-  }
-
-  const minutes = Number(match[1]);
-  const seconds = Number(match[2]);
+function parsePaceValue(minutes: string, seconds: string) {
+  const parsedMinutes = Number(minutes);
+  const parsedSeconds = Number(seconds);
 
   if (
-    !Number.isFinite(minutes) ||
-    !Number.isFinite(seconds)
+    !Number.isFinite(parsedMinutes) ||
+    !Number.isFinite(parsedSeconds)
   ) {
     return null;
   }
 
-  return minutes * 60 + seconds;
+  return parsedMinutes * 60 + parsedSeconds;
 }
 
-function extractTargetPaceRange(
+function extractPaceRange(
   targetPaceText: string | null
-) {
+): PaceRange | null {
   if (!targetPaceText) {
     return null;
   }
 
   const matches = Array.from(
-    targetPaceText.matchAll(
-      /(\d{1,2}:\d{2})/g
-    )
+    targetPaceText.matchAll(/(\d{1,2}):(\d{2})/g)
   )
-    .map((match) =>
-      paceStringToSeconds(match[1])
-    )
+    .map((match) => parsePaceValue(match[1], match[2]))
     .filter(
       (value): value is number =>
         value !== null
@@ -566,224 +540,218 @@ function extractTargetPaceRange(
 
   if (matches.length === 1) {
     return {
-      fastestSecondsPerKm:
-        matches[0],
-      slowestSecondsPerKm:
-        matches[0],
+      fastestSecondsPerKm: matches[0] - 5,
+      slowestSecondsPerKm: matches[0] + 5,
     };
   }
 
   return {
-    fastestSecondsPerKm: Math.min(
-      ...matches
-    ),
-    slowestSecondsPerKm: Math.max(
-      ...matches
-    ),
+    fastestSecondsPerKm: Math.min(...matches),
+    slowestSecondsPerKm: Math.max(...matches),
   };
 }
 
-function formatPaceSeconds(
-  value: number
-) {
-  const rounded = Math.round(value);
-  const minutes = Math.floor(
-    rounded / 60
-  );
-  const seconds = rounded % 60;
-
-  return `${minutes}:${String(
-    seconds
-  ).padStart(2, "0")} /km`;
-}
-
-function calculatePaceScore(
+function scorePace(
   session: MatchablePlannedSession,
-  runs: MatchableRun[]
-) {
-  const targetRange =
-    extractTargetPaceRange(
-      session.targetPaceText
-    );
+  matchedRuns: MatchableRun[]
+): SessionMatchComponent {
+  const paceRange = extractPaceRange(
+    session.targetPaceText
+  );
 
-  if (!targetRange) {
+  if (!paceRange) {
     return {
+      key: "pace",
+      label: "Pace",
+      score: 0,
       available: false,
-      score: 100,
       explanation:
         "No numerical pace target was available.",
     };
   }
 
-  const actualPace =
-    getWeightedAveragePace(runs);
+  const actualPace = getWeightedAveragePace(matchedRuns);
 
   if (actualPace === null) {
     return {
+      key: "pace",
+      label: "Pace",
+      score: 0,
       available: false,
-      score: 100,
       explanation:
-        "The completed run did not contain enough data to calculate pace.",
+        "The matched activity did not contain enough data to calculate pace.",
     };
   }
 
-  const {
-    fastestSecondsPerKm,
-    slowestSecondsPerKm,
-  } = targetRange;
-
   if (
-    actualPace >= fastestSecondsPerKm &&
-    actualPace <= slowestSecondsPerKm
+    actualPace >= paceRange.fastestSecondsPerKm &&
+    actualPace <= paceRange.slowestSecondsPerKm
   ) {
     return {
-      available: true,
+      key: "pace",
+      label: "Pace",
       score: 100,
-      explanation: `${formatPaceSeconds(
+      available: true,
+      explanation: `${formatPace(
         actualPace
       )} was within the planned pace range.`,
     };
   }
 
   const deviation =
-    actualPace < fastestSecondsPerKm
-      ? fastestSecondsPerKm -
-        actualPace
-      : actualPace -
-        slowestSecondsPerKm;
-
-  const score = clampScore(
-    100 - deviation * 2
-  );
+    actualPace < paceRange.fastestSecondsPerKm
+      ? paceRange.fastestSecondsPerKm - actualPace
+      : actualPace - paceRange.slowestSecondsPerKm;
 
   const direction =
-    actualPace <
-    fastestSecondsPerKm
+    actualPace < paceRange.fastestSecondsPerKm
       ? "faster"
       : "slower";
 
   return {
+    key: "pace",
+    label: "Pace",
+    score: Math.round(clamp(100 - deviation * 2.5, 25, 100)),
     available: true,
-    score,
-    explanation: `${formatPaceSeconds(
+    explanation: `${formatPace(
       actualPace
-    )} was ${Math.round(
+    )} was approximately ${Math.round(
       deviation
-    )} sec/km ${direction} than the planned range.`,
+    )} sec/km ${direction} than planned.`,
   };
 }
 
-function calculateStructureScore(
+function scoreSessionType(
   session: MatchablePlannedSession,
-  runs: MatchableRun[]
-) {
-  if (runs.length === 0) {
+  matchedRuns: MatchableRun[]
+): SessionMatchComponent {
+  if (session.isRestDay) {
     return {
+      key: "session-type",
+      label: "Recovery compliance",
+      score: matchedRuns.length === 0 ? 100 : 20,
       available: true,
-      score: 0,
       explanation:
-        "No matching activity was detected.",
+        matchedRuns.length === 0
+          ? "No run was recorded on the planned rest day."
+          : "Running activity was recorded on the planned rest day.",
     };
   }
 
-  const plannedType = normaliseText(
+  if (matchedRuns.length === 0) {
+    return {
+      key: "session-type",
+      label: "Session type",
+      score: 0,
+      available: true,
+      explanation: "No matching activity was found.",
+    };
+  }
+
+  const plannedType = normaliseSessionType(
     session.sessionType
   );
 
-  const structureSensitiveTypes = [
-    "interval",
-    "threshold",
-    "tempo",
-    "marathon pace",
-    "marathon-pace",
-  ];
+  const actualTypes = matchedRuns.map(classifyRun);
+
+  if (actualTypes.includes(plannedType)) {
+    return {
+      key: "session-type",
+      label: "Session type",
+      score: 100,
+      available: true,
+      explanation:
+        "The recorded workout type matched the planned session.",
+    };
+  }
 
   if (
-    !structureSensitiveTypes.includes(
-      plannedType
+    actualTypes.some((actualType) =>
+      sessionTypesAreCompatible(plannedType, actualType)
     )
   ) {
     return {
-      available: false,
-      score: 100,
+      key: "session-type",
+      label: "Session type",
+      score: 78,
+      available: true,
       explanation:
-        "Detailed workout structure was not required for this session type.",
+        "The recorded workout provided a broadly similar training stimulus.",
     };
   }
 
-  const laps = runs.flatMap(
-    (run) =>
-      Array.isArray(run.laps)
-        ? run.laps
-        : []
-  );
-
-  if (laps.length === 0) {
-    const typeScore =
-      calculateSessionTypeScore(
-        session,
-        runs
-      );
-
+  if (
+    plannedType === "long-run" &&
+    matchedRuns.some((run) => getRunDistanceKm(run) >= 16)
+  ) {
     return {
+      key: "session-type",
+      label: "Session type",
+      score: 82,
       available: true,
-      score: Math.min(
-        75,
-        typeScore
-      ),
       explanation:
-        "The activity was detected, but detailed Strava lap data was unavailable to verify the planned repetitions.",
-    };
-  }
-
-  const meaningfulLaps =
-    laps.filter((lap) => {
-      const distance =
-        typeof lap.distance === "number"
-          ? lap.distance
-          : 0;
-
-      const movingTime =
-        typeof lap.moving_time ===
-        "number"
-          ? lap.moving_time
-          : 0;
-
-      return (
-        distance >= 200 &&
-        movingTime > 0
-      );
-    });
-
-  if (meaningfulLaps.length >= 3) {
-    return {
-      available: true,
-      score: 90,
-      explanation: `${meaningfulLaps.length} meaningful laps were available, providing evidence that the workout structure was completed.`,
+        "The recorded distance supports classification as a long run.",
     };
   }
 
   return {
+    key: "session-type",
+    label: "Session type",
+    score: 45,
     available: true,
-    score: 65,
     explanation:
-      "Some lap data was available, but there was not enough detail to verify the full planned structure.",
+      "A run was completed, but the recorded workout type did not clearly match the plan.",
   };
 }
 
-function getStatusLabel(
-  status: SessionMatchStatus
+function calculateExecutionScore(
+  components: SessionMatchComponent[]
 ) {
-  const labels: Record<
-    SessionMatchStatus,
-    string
+  const weights: Record<
+    SessionMatchComponentKey,
+    number
   > = {
+    distance: 0.45,
+    "session-type": 0.35,
+    pace: 0.2,
+    structure: 0,
+    "heart-rate": 0,
+  };
+
+  const availableComponents = components.filter(
+    (component) =>
+      component.available &&
+      weights[component.key] > 0
+  );
+
+  if (availableComponents.length === 0) {
+    return null;
+  }
+
+  const totalWeight = availableComponents.reduce(
+    (sum, component) =>
+      sum + weights[component.key],
+    0
+  );
+
+  const weightedScore = availableComponents.reduce(
+    (sum, component) =>
+      sum +
+      component.score * weights[component.key],
+    0
+  );
+
+  return Math.round(weightedScore / totalWeight);
+}
+
+function getStatusLabel(status: SessionMatchStatus) {
+  const labels: Record<SessionMatchStatus, string> = {
     completed: "Completed",
     partial: "Partially completed",
     missed: "Missed",
+    rest: "Rest observed",
     upcoming: "Upcoming",
     unverified: "Awaiting verification",
-    rest: "Rest day observed",
   };
 
   return labels[status];
@@ -791,42 +759,29 @@ function getStatusLabel(
 
 function getSessionStatus(
   session: MatchablePlannedSession,
-  runs: MatchableRun[],
+  matchedRuns: MatchableRun[],
   score: number | null
 ): SessionMatchStatus {
-  const todayKey =
-    new Date()
-      .toISOString()
-      .slice(0, 10);
+  const today = getTodayDateKey();
+
+  if (session.plannedDate > today) {
+    return "upcoming";
+  }
 
   if (session.isRestDay) {
-    if (runs.length === 0) {
-      return session.plannedDate >
-        todayKey
-        ? "upcoming"
-        : "rest";
-    }
-
-    return session.plannedDate >
-      todayKey
-      ? "upcoming"
+    return matchedRuns.length === 0
+      ? "rest"
       : "partial";
   }
 
   if (
-    session.plannedDate > todayKey
-  ) {
-    return "upcoming";
-  }
-
-  if (
-    session.plannedDate === todayKey &&
-    runs.length === 0
+    session.plannedDate === today &&
+    matchedRuns.length === 0
   ) {
     return "unverified";
   }
 
-  if (runs.length === 0) {
+  if (matchedRuns.length === 0) {
     return "missed";
   }
 
@@ -834,102 +789,80 @@ function getSessionStatus(
     return "unverified";
   }
 
-  if (score >= 75) {
+  if (score >= 70) {
     return "completed";
   }
 
-  if (score >= 35) {
-    return "partial";
-  }
-
-  return "missed";
+  return "partial";
 }
 
 function buildVerdict(
   status: SessionMatchStatus,
-  score: number | null,
-  session: MatchablePlannedSession,
-  completedDistanceKm: number
+  score: number | null
 ) {
   if (status === "upcoming") {
     return {
-      verdict: "Session is still upcoming.",
+      verdict: "Session not yet due",
       detail:
-        "No execution assessment is required yet.",
-    };
-  }
-
-  if (status === "unverified") {
-    return {
-      verdict:
-        "Session has not yet been verified.",
-      detail:
-        "The session is scheduled for today and no matching Strava activity has been detected yet.",
+        "This session will be assessed after its planned date.",
     };
   }
 
   if (status === "rest") {
     return {
-      verdict:
-        "Planned recovery day observed.",
+      verdict: "Recovery instruction followed",
       detail:
-        "No run was detected on the planned rest day.",
+        "No running activity was recorded on the planned rest day.",
     };
   }
 
-  if (
-    status === "missed" &&
-    completedDistanceKm === 0
-  ) {
+  if (status === "unverified") {
     return {
-      verdict:
-        "Planned session not detected.",
+      verdict: "Session awaiting verification",
       detail:
-        "No matching Strava activity was found for this date.",
+        "The session is scheduled for today or cannot yet be assessed reliably.",
+    };
+  }
+
+  if (status === "missed") {
+    return {
+      verdict: "Planned session not detected",
+      detail:
+        "No matching running activity was found for the planned date.",
     };
   }
 
   if (score !== null && score >= 90) {
     return {
-      verdict:
-        "Excellent execution.",
+      verdict: `Excellent execution (${score}%)`,
       detail:
-        "The completed activity aligned closely with the coach's planned session.",
+        "The completed activity aligned closely with the coach's plan.",
     };
   }
 
-  if (score !== null && score >= 75) {
+  if (score !== null && score >= 80) {
     return {
-      verdict:
-        "Session completed well.",
+      verdict: `Strong execution (${score}%)`,
       detail:
         "The main requirements of the planned session were achieved.",
     };
   }
 
-  if (score !== null && score >= 50) {
+  if (score !== null && score >= 70) {
     return {
-      verdict:
-        "Session partially matched the plan.",
+      verdict: `Session completed (${score}%)`,
       detail:
-        "A run was completed, but one or more important session requirements were not fully met.",
-    };
-  }
-
-  if (session.isRestDay) {
-    return {
-      verdict:
-        "Additional activity was completed on a planned rest day.",
-      detail:
-        "This may be acceptable, but it reduces recovery compliance for the week.",
+        "The session was completed with some variation from the plan.",
     };
   }
 
   return {
     verdict:
-      "Completed activity did not closely match the planned session.",
+      score === null
+        ? "Activity requires review"
+        : `Partial execution (${score}%)`,
     detail:
-      "Review the distance, workout type and available pace evidence.",
+      "A run was recorded, but it did not sufficiently match the planned distance, pace or workout type.",
   };
 }
 
@@ -939,8 +872,7 @@ function getRunsForSessionDate(
 ) {
   return runs.filter(
     (run) =>
-      run.date.slice(0, 10) ===
-      session.plannedDate
+      getRunDateKey(run) === session.plannedDate
   );
 }
 
@@ -948,230 +880,92 @@ export function matchSessionToRuns(
   session: MatchablePlannedSession,
   allRuns: MatchableRun[]
 ): SessionMatchResult {
-  const matchingRuns =
-    getRunsForSessionDate(
-      session,
-      allRuns
-    );
+  const matchedRuns = getRunsForSessionDate(
+    session,
+    allRuns
+  );
 
-  const completedDistanceKm =
-    matchingRuns.reduce(
-      (sum, run) =>
-        sum + getRunDistanceKm(run),
+  const completedDistanceKm = round(
+    matchedRuns.reduce(
+      (sum, run) => sum + getRunDistanceKm(run),
       0
-    );
+    ),
+    2
+  );
 
-  if (session.isRestDay) {
-    const restScore =
-      matchingRuns.length === 0
-        ? 100
-        : 20;
+  const plannedMinimumDistanceKm =
+    session.distance.minimumKm;
 
-    const status =
-      getSessionStatus(
-        session,
-        matchingRuns,
-        restScore
-      );
+  const plannedMaximumDistanceKm =
+    session.distance.maximumKm;
 
-    const verdict = buildVerdict(
-      status,
-      restScore,
-      session,
-      completedDistanceKm
-    );
-
-    return {
-      sessionId: session.id,
-      plannedDate:
-        session.plannedDate,
-      status,
-      statusLabel:
-        getStatusLabel(status),
-      score:
-        status === "upcoming"
-          ? null
-          : restScore,
-      verdict: verdict.verdict,
-      detail: verdict.detail,
-      matchedRuns: matchingRuns,
-      completedDistanceKm,
-      components: [
-        {
-          key: "session-type",
-          label: "Recovery compliance",
-          available: true,
-          score: restScore,
-          explanation:
-            matchingRuns.length === 0
-              ? "No running activity was recorded."
-              : `${matchingRuns.length} running activity${
-                  matchingRuns.length === 1
-                    ? " was"
-                    : "ies were"
-                } recorded on the planned rest day.`,
-        },
-      ],
-    };
-  }
-
-  const distance =
-    calculateDistanceScore(
-      session,
-      completedDistanceKm
-    );
-
-  const pace =
-    calculatePaceScore(
-      session,
-      matchingRuns
-    );
-
-  const structure =
-    calculateStructureScore(
-      session,
-      matchingRuns
-    );
-
-  const typeScore =
-    calculateSessionTypeScore(
-      session,
-      matchingRuns
-    );
-
-  const components: SessionMatchComponent[] =
-    [
-      {
-        key: "distance",
-        label: "Distance",
-        available:
-          distance.available,
-        score: distance.score,
-        explanation:
-          distance.explanation,
-      },
-      {
-        key: "session-type",
-        label: "Session type",
-        available: true,
-        score: typeScore,
-        explanation:
-          matchingRuns.length === 0
-            ? "No activity was available to assess the planned session type."
-            : typeScore >= 85
-            ? "The activity description and recorded workout type were consistent with the plan."
-            : "The activity was completed, but its recorded type did not clearly match the planned workout.",
-      },
-      {
-        key: "pace",
-        label: "Pace",
-        available: pace.available,
-        score: pace.score,
-        explanation:
-          pace.explanation,
-      },
-      {
-        key: "structure",
-        label: "Workout structure",
-        available:
-          structure.available,
-        score: structure.score,
-        explanation:
-          structure.explanation,
-      },
-    ];
-
-  const availableComponents =
-    components.filter(
-      (component) =>
-        component.available
-    );
-
-  const weightedScore =
-    matchingRuns.length === 0
-      ? 0
-      : availableComponents.reduce(
-          (total, component) => {
-            const weight =
-              component.key ===
-              "distance"
-                ? 0.35
-                : component.key ===
-                  "session-type"
-                ? 0.25
-                : component.key ===
-                  "pace"
-                ? 0.2
-                : 0.2;
-
-            return (
-              total +
-              component.score * weight
-            );
-          },
-          0
+  const distanceDifferenceKm =
+    plannedMinimumDistanceKm === null
+      ? null
+      : round(
+          completedDistanceKm -
+            plannedMinimumDistanceKm,
+          2
         );
 
-  const availableWeight =
-    availableComponents.reduce(
-      (total, component) => {
-        if (
-          component.key === "distance"
-        ) {
-          return total + 0.35;
-        }
+  const components: SessionMatchComponent[] =
+    session.isRestDay
+      ? [scoreSessionType(session, matchedRuns)]
+      : [
+          scoreDistance(
+            session,
+            completedDistanceKm
+          ),
+          scoreSessionType(
+            session,
+            matchedRuns
+          ),
+          scorePace(session, matchedRuns),
+        ];
 
-        if (
-          component.key ===
-          "session-type"
-        ) {
-          return total + 0.25;
-        }
-
-        return total + 0.2;
-      },
-      0
-    );
-
-  const score =
-    matchingRuns.length === 0
-      ? 0
-      : availableWeight > 0
-      ? clampScore(
-          weightedScore /
-            availableWeight
-        )
-      : null;
+  const executionScore = session.isRestDay
+    ? matchedRuns.length === 0
+      ? 100
+      : 20
+    : matchedRuns.length === 0
+    ? 0
+    : calculateExecutionScore(components);
 
   const status = getSessionStatus(
     session,
-    matchingRuns,
-    score
+    matchedRuns,
+    executionScore
   );
+
+  const displayedScore =
+    status === "upcoming" ||
+    status === "unverified"
+      ? null
+      : executionScore;
 
   const verdict = buildVerdict(
     status,
-    score,
-    session,
-    completedDistanceKm
+    displayedScore
   );
 
   return {
     sessionId: session.id,
-    plannedDate:
-      session.plannedDate,
+    plannedDate: session.plannedDate,
     status,
-    statusLabel:
-      getStatusLabel(status),
-    score:
-      status === "upcoming" ||
-      status === "unverified"
-        ? null
-        : score,
+    statusLabel: getStatusLabel(status),
+    score: displayedScore,
     verdict: verdict.verdict,
     detail: verdict.detail,
-    matchedRuns: matchingRuns,
+
+    plannedSession: session,
+    matchedRuns,
+    matchedRunIds: matchedRuns.map((run) => run.id),
+
     completedDistanceKm,
+    plannedMinimumDistanceKm,
+    plannedMaximumDistanceKm,
+    distanceDifferenceKm,
+
     components,
   };
 }
@@ -1179,109 +973,114 @@ export function matchSessionToRuns(
 export function matchTrainingWeek(
   sessions: MatchablePlannedSession[],
   runs: MatchableRun[]
-) {
+): SessionMatchResult[] {
   return sessions
     .slice()
-    .sort(
-      (a, b) =>
-        a.plannedDate.localeCompare(
-          b.plannedDate
-        )
+    .sort((first, second) =>
+      first.plannedDate.localeCompare(
+        second.plannedDate
+      )
     )
     .map((session) =>
-      matchSessionToRuns(
-        session,
-        runs
-      )
+      matchSessionToRuns(session, runs)
     );
 }
 
 export function calculateWeekExecution(
   matches: SessionMatchResult[]
-): WeekExecutionSummary {
-  const dueMatches = matches.filter(
+): WeekExecution {
+  const dueTrainingMatches = matches.filter(
     (match) =>
       match.status !== "upcoming" &&
-      match.status !==
-        "unverified"
+      match.status !== "unverified" &&
+      !match.plannedSession.isRestDay
   );
 
-  const scoredMatches =
-    dueMatches.filter(
-      (
-        match
-      ): match is SessionMatchResult & {
-        score: number;
-      } =>
-        typeof match.score ===
-          "number" &&
-        Number.isFinite(match.score)
-    );
+  const completedCount = dueTrainingMatches.filter(
+    (match) => match.status === "completed"
+  ).length;
 
-  const completedCount =
-    dueMatches.filter(
-      (match) =>
-        match.status ===
-          "completed" ||
-        match.status === "rest"
-    ).length;
+  const partialCount = dueTrainingMatches.filter(
+    (match) => match.status === "partial"
+  ).length;
 
-  const partialCount =
-    dueMatches.filter(
-      (match) =>
-        match.status === "partial"
-    ).length;
+  const missedCount = dueTrainingMatches.filter(
+    (match) => match.status === "missed"
+  ).length;
 
-  const missedCount =
-    dueMatches.filter(
-      (match) =>
-        match.status === "missed"
-    ).length;
+  const restCount = matches.filter(
+    (match) => match.status === "rest"
+  ).length;
 
-  const dueCount =
-    dueMatches.length;
+  const upcomingCount = matches.filter(
+    (match) => match.status === "upcoming"
+  ).length;
+
+  const unverifiedCount = matches.filter(
+    (match) => match.status === "unverified"
+  ).length;
+
+  const scoredMatches = matches.filter(
+    (
+      match
+    ): match is SessionMatchResult & {
+      score: number;
+    } =>
+      typeof match.score === "number" &&
+      Number.isFinite(match.score) &&
+      !match.plannedSession.isRestDay
+  );
 
   const averageExecutionScore =
-    scoredMatches.length > 0
-      ? Math.round(
+    scoredMatches.length === 0
+      ? null
+      : Math.round(
           scoredMatches.reduce(
-            (sum, match) =>
-              sum + match.score,
+            (sum, match) => sum + match.score,
             0
-          ) /
-            scoredMatches.length
-        )
-      : null;
+          ) / scoredMatches.length
+        );
 
   const completionPercentage =
-    dueCount > 0
-      ? Math.round(
+    dueTrainingMatches.length === 0
+      ? 0
+      : Math.round(
           (completedCount /
-            dueCount) *
+            dueTrainingMatches.length) *
             100
-        )
-      : 0;
+        );
 
   return {
-    plannedCount:
-      matches.length,
-    dueCount,
+    plannedCount: matches.length,
+    dueCount: dueTrainingMatches.length,
     completedCount,
     partialCount,
     missedCount,
-    pendingCount:
-      matches.filter(
-        (match) =>
-          match.status ===
-            "upcoming"
-      ).length,
-    unverifiedCount:
-      matches.filter(
-        (match) =>
-          match.status ===
-            "unverified"
-      ).length,
-    averageExecutionScore,
+    restCount,
+    upcomingCount,
+    unverifiedCount,
     completionPercentage,
+    averageExecutionScore,
   };
+}
+
+export function getDaysBetweenDates(
+  firstDate: string,
+  secondDate: string
+) {
+  const first = new Date(`${firstDate.slice(0, 10)}T12:00:00`);
+  const second = new Date(`${secondDate.slice(0, 10)}T12:00:00`);
+
+  if (
+    Number.isNaN(first.getTime()) ||
+    Number.isNaN(second.getTime())
+  ) {
+    return null;
+  }
+
+  return Math.round(
+    Math.abs(
+      first.getTime() - second.getTime()
+    ) / MS_PER_DAY
+  );
 }
