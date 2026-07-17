@@ -8,7 +8,9 @@ import {
   orderBy,
   query,
 } from "firebase/firestore";
+
 import { db } from "../lib/firebase";
+
 import {
   calculateWeekExecution,
   matchSessionToRuns,
@@ -16,6 +18,13 @@ import {
   type MatchableRun,
   type SessionMatchResult,
 } from "../lib/session-matching";
+
+import {
+  buildWeeklyTrainingAssessment,
+  type WeeklyTrainingAssessment,
+} from "../lib/training-intelligence";
+
+import WeeklyTrainingVerdict from "./components/WeeklyTrainingVerdict";
 
 type Run = MatchableRun;
 
@@ -107,9 +116,7 @@ function secondsToTime(value: number | null) {
 
   const rounded = Math.round(value);
   const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor(
-    (rounded % 3600) / 60
-  );
+  const minutes = Math.floor((rounded % 3600) / 60);
   const seconds = rounded % 60;
 
   if (hours > 0) {
@@ -148,22 +155,15 @@ function parseDate(value: string) {
   if (!value) return null;
 
   const cleanValue = value.slice(0, 10);
-  const date = new Date(
-    `${cleanValue}T12:00:00`
-  );
+  const date = new Date(`${cleanValue}T12:00:00`);
 
-  return Number.isNaN(date.getTime())
-    ? null
-    : date;
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function dateKey(date: Date) {
   return [
     date.getFullYear(),
-    String(date.getMonth() + 1).padStart(
-      2,
-      "0"
-    ),
+    String(date.getMonth() + 1).padStart(2, "0"),
     String(date.getDate()).padStart(2, "0"),
   ].join("-");
 }
@@ -196,16 +196,11 @@ function getDaysAgo(value: string) {
 
   if (!date) return 9999;
 
-  return getDaysBetween(
-    startOfToday(),
-    date
-  );
+  return getDaysBetween(startOfToday(), date);
 }
 
 function getDaysToRace() {
-  const raceDate = parseDate(
-    MALAGA_RACE_DATE
-  );
+  const raceDate = parseDate(MALAGA_RACE_DATE);
 
   if (!raceDate) return null;
 
@@ -216,15 +211,15 @@ function getDaysToRace() {
 }
 
 function getTrainingWeekNumber() {
-  const blockStart = parseDate(
-    BLOCK_START_DATE
-  );
+  const blockStart = parseDate(BLOCK_START_DATE);
 
   if (!blockStart) return 0;
 
   const today = startOfToday();
 
-  if (today < blockStart) return 0;
+  if (today < blockStart) {
+    return 0;
+  }
 
   const weekNumber =
     Math.floor(
@@ -284,11 +279,8 @@ function getRunPaceSeconds(run: Run) {
     return run.paceSecondsPerKm;
   }
 
-  const distanceKm =
-    getRunDistanceKm(run);
-
-  const timeSeconds =
-    getRunTimeSeconds(run);
+  const distanceKm = getRunDistanceKm(run);
+  const timeSeconds = getRunTimeSeconds(run);
 
   if (!distanceKm || !timeSeconds) {
     return null;
@@ -307,6 +299,20 @@ function formatDisplayDate(value: string) {
     month: "long",
     year: "numeric",
   });
+}
+
+function formatWeekLabel(
+  week: TrainingWeek | null
+) {
+  if (!week) {
+    return "Current week";
+  }
+
+  return `${formatDisplayDate(
+    week.weekStartingDate
+  )} – ${formatDisplayDate(
+    week.weekEndingDate
+  )}`;
 }
 
 function calculateEvidenceScore(
@@ -427,8 +433,7 @@ function findCurrentTrainingWeek(
   return (
     weeks.find(
       (week) =>
-        todayKey >=
-          week.weekStartingDate &&
+        todayKey >= week.weekStartingDate &&
         todayKey <= week.weekEndingDate
     ) || null
   );
@@ -521,14 +526,9 @@ function MetricCard({
 }
 
 export default function HomePage() {
-  const [runs, setRuns] = useState<Run[]>(
-    []
-  );
-
-  const [
-    trainingWeeks,
-    setTrainingWeeks,
-  ] = useState<TrainingWeek[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [trainingWeeks, setTrainingWeeks] =
+    useState<TrainingWeek[]>([]);
 
   const [loading, setLoading] =
     useState(true);
@@ -586,8 +586,7 @@ export default function HomePage() {
         const loadedRuns: Run[] =
           runsSnapshot.docs.map(
             (document) => {
-              const data =
-                document.data();
+              const data = document.data();
 
               return {
                 id: document.id,
@@ -609,34 +608,38 @@ export default function HomePage() {
                 name: data.name || "",
                 notes: data.notes || "",
                 source: data.source || "",
+
                 distanceMeters:
                   typeof data.distanceMeters ===
                   "number"
                     ? data.distanceMeters
                     : undefined,
+
                 movingTimeSeconds:
                   typeof data.movingTimeSeconds ===
                   "number"
                     ? data.movingTimeSeconds
                     : undefined,
+
                 paceSecondsPerKm:
                   typeof data.paceSecondsPerKm ===
                   "number"
                     ? data.paceSecondsPerKm
                     : null,
+
                 averageHeartrate:
                   typeof data.averageHeartrate ===
                   "number"
                     ? data.averageHeartrate
                     : null,
+
                 workoutType:
                   typeof data.workoutType ===
                   "number"
                     ? data.workoutType
                     : null,
-                laps: Array.isArray(
-                  data.laps
-                )
+
+                laps: Array.isArray(data.laps)
                   ? data.laps
                   : undefined,
               };
@@ -772,15 +775,48 @@ export default function HomePage() {
     [weeklyMatches]
   );
 
+  const currentWeekRuns = useMemo(() => {
+    if (!currentTrainingWeek) {
+      return [];
+    }
+
+    return runs.filter((run) => {
+      const runDate = run.date.slice(0, 10);
+
+      return (
+        runDate >=
+          currentTrainingWeek.weekStartingDate &&
+        runDate <=
+          currentTrainingWeek.weekEndingDate
+      );
+    });
+  }, [currentTrainingWeek, runs]);
+
+  const weeklyAssessment: WeeklyTrainingAssessment =
+    useMemo(
+      () =>
+        buildWeeklyTrainingAssessment({
+          runs: currentWeekRuns,
+          plannedSessions:
+            currentTrainingWeek?.sessions || [],
+          matches: weeklyMatches,
+        }),
+      [
+        currentWeekRuns,
+        currentTrainingWeek,
+        weeklyMatches,
+      ]
+    );
+
   const latestRun = runs[0] || null;
 
   const recent28DayRuns = runs.filter(
     (run) => {
-      const daysAgo =
-        getDaysAgo(run.date);
+      const daysAgo = getDaysAgo(run.date);
 
       return (
-        daysAgo >= 0 && daysAgo <= 28
+        daysAgo >= 0 &&
+        daysAgo <= 28
       );
     }
   );
@@ -798,7 +834,8 @@ export default function HomePage() {
         getDaysAgo(run.date);
 
       return (
-        daysAgo >= 0 && daysAgo <= 42
+        daysAgo >= 0 &&
+        daysAgo <= 42
       );
     })
     .reduce(
@@ -825,12 +862,12 @@ export default function HomePage() {
     getTrainingWeekNumber();
 
   const trainingPhase =
+    currentTrainingWeek?.phase ||
     getTrainingPhase(
       trainingWeekNumber
     );
 
-  const daysToRace =
-    getDaysToRace();
+  const daysToRace = getDaysToRace();
 
   if (loading) {
     return (
@@ -881,9 +918,9 @@ export default function HomePage() {
 
             <p className="hero-description">
               Execute the coach&apos;s plan,
-              develop marathon-specific
-              endurance and arrive in Málaga
-              ready to run under three hours.
+              develop marathon-specific endurance
+              and arrive in Málaga ready to run
+              under three hours.
             </p>
           </div>
 
@@ -930,10 +967,9 @@ export default function HomePage() {
             </span>
 
             <p>
-              The current evidence score
-              combines recent consistency,
-              mileage, quality work and
-              long-run progression.
+              The current evidence score combines
+              recent consistency, mileage,
+              quality work and long-run progression.
             </p>
           </div>
 
@@ -950,6 +986,7 @@ export default function HomePage() {
 
             <div>
               <span>Training block</span>
+
               <strong>
                 {trainingWeekNumber > 0
                   ? `Week ${trainingWeekNumber} of 16`
@@ -1057,6 +1094,7 @@ export default function HomePage() {
                       null
                         ? "—"
                         : todayMatch.score}
+
                       <small>
                         {todayMatch.score ===
                         null
@@ -1115,8 +1153,7 @@ export default function HomePage() {
               <p>
                 The current week exists in
                 Google Sheets, but today&apos;s
-                session has not yet been
-                populated.
+                session has not yet been populated.
               </p>
             </div>
           ) : (
@@ -1126,8 +1163,8 @@ export default function HomePage() {
               </h3>
 
               <p>
-                No coach-plan week currently
-                covers today&apos;s date.
+                No coach-plan week currently covers
+                today&apos;s date.
               </p>
             </div>
           )}
@@ -1226,8 +1263,7 @@ export default function HomePage() {
 
           <div className="week-header-summary">
             <span className="status-badge status-badge-neutral">
-              {currentTrainingWeek?.phase ||
-                trainingPhase}
+              {trainingPhase}
             </span>
 
             {weekExecution.averageExecutionScore !==
@@ -1251,15 +1287,13 @@ export default function HomePage() {
             const key = dateKey(date);
 
             const plannedSession =
-              sessionsByDate.get(key) ||
-              null;
+              sessionsByDate.get(key) || null;
 
             const dayRuns =
               runsByDate.get(key) || [];
 
             const matchResult =
-              matchesByDate.get(key) ||
-              null;
+              matchesByDate.get(key) || null;
 
             const isToday =
               key === todayKey;
@@ -1318,14 +1352,11 @@ export default function HomePage() {
                   </small>
                 )}
 
-                {matchResult?.score !==
-                  null &&
+                {matchResult?.score !== null &&
                   matchResult?.score !==
                     undefined && (
                     <div className="day-execution-score">
-                      <span>
-                        Execution
-                      </span>
+                      <span>Execution</span>
 
                       <strong>
                         {matchResult.score}%
@@ -1356,62 +1387,15 @@ export default function HomePage() {
             );
           })}
         </div>
-
-        {weeklyMatches.length > 0 && (
-          <div className="week-review">
-            <div>
-              <span>
-                Weekly completion
-              </span>
-
-              <strong>
-                {
-                  weekExecution.completionPercentage
-                }
-                %
-              </strong>
-            </div>
-
-            <div>
-              <span>
-                Average execution
-              </span>
-
-              <strong>
-                {weekExecution.averageExecutionScore ===
-                null
-                  ? "N/A"
-                  : `${weekExecution.averageExecutionScore}%`}
-              </strong>
-            </div>
-
-            <div>
-              <span>Completed</span>
-              <strong>
-                {
-                  weekExecution.completedCount
-                }
-              </strong>
-            </div>
-
-            <div>
-              <span>Partial</span>
-              <strong>
-                {
-                  weekExecution.partialCount
-                }
-              </strong>
-            </div>
-
-            <div>
-              <span>Missed</span>
-              <strong>
-                {weekExecution.missedCount}
-              </strong>
-            </div>
-          </div>
-        )}
       </section>
+
+      <WeeklyTrainingVerdict
+        assessment={weeklyAssessment}
+        weekLabel={formatWeekLabel(
+          currentTrainingWeek
+        )}
+        phaseLabel={trainingPhase}
+      />
 
       <section className="surface-card latest-card">
         <div className="section-header">
@@ -1435,8 +1419,7 @@ export default function HomePage() {
           <div className="latest-layout">
             <div className="latest-heading">
               <span className="status-badge status-badge-primary">
-                {latestRun.runType ||
-                  "Run"}
+                {latestRun.runType || "Run"}
               </span>
 
               <h3>
@@ -1529,8 +1512,10 @@ export default function HomePage() {
         .loading-spinner {
           width: 34px;
           height: 34px;
-          border: 3px solid var(--colour-slate-200);
-          border-top-color: var(--colour-blue-600);
+          border: 3px solid
+            var(--colour-slate-200);
+          border-top-color:
+            var(--colour-blue-600);
           border-radius: 999px;
           animation: spin 800ms linear infinite;
         }
@@ -1569,8 +1554,7 @@ export default function HomePage() {
         .hero-main {
           display: grid;
           grid-template-columns:
-            minmax(0, 1fr)
-            auto;
+            minmax(0, 1fr) auto;
           gap: 32px;
         }
 
@@ -1591,7 +1575,11 @@ export default function HomePage() {
         .hero-card h1 {
           margin: 15px 0 0;
           color: #ffffff;
-          font-size: clamp(38px, 6vw, 66px);
+          font-size: clamp(
+            38px,
+            6vw,
+            66px
+          );
           font-weight: 790;
           letter-spacing: -0.06em;
           line-height: 0.98;
@@ -1607,9 +1595,11 @@ export default function HomePage() {
         .countdown-card {
           min-width: 190px;
           padding: 19px;
-          border: 1px solid rgba(96, 165, 250, 0.24);
+          border: 1px solid
+            rgba(96, 165, 250, 0.24);
           border-radius: 15px;
-          background: rgba(255, 255, 255, 0.045);
+          background:
+            rgba(255, 255, 255, 0.045);
         }
 
         .countdown-card > p {
@@ -1656,7 +1646,8 @@ export default function HomePage() {
           align-items: flex-end;
           justify-content: space-between;
           gap: 24px;
-          border-top: 1px solid rgba(148, 163, 184, 0.14);
+          border-top: 1px solid
+            rgba(148, 163, 184, 0.14);
         }
 
         .hero-status {
@@ -1730,7 +1721,11 @@ export default function HomePage() {
         .empty-session h3 {
           margin: 0;
           color: var(--colour-slate-950);
-          font-size: clamp(25px, 4vw, 37px);
+          font-size: clamp(
+            25px,
+            4vw,
+            37px
+          );
           font-weight: 760;
           letter-spacing: -0.045em;
         }
@@ -1781,7 +1776,8 @@ export default function HomePage() {
         .execution-panel {
           margin-top: 20px;
           padding: 17px;
-          border: 1px solid var(--colour-border);
+          border: 1px solid
+            var(--colour-border);
           border-radius: 14px;
           background: #ffffff;
         }
@@ -1863,7 +1859,8 @@ export default function HomePage() {
           align-items: flex-start;
           justify-content: space-between;
           gap: 14px;
-          border-top: 1px solid var(--colour-border);
+          border-top: 1px solid
+            var(--colour-border);
         }
 
         .execution-component span {
@@ -1950,7 +1947,8 @@ export default function HomePage() {
 
         .metrics-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns:
+            repeat(4, minmax(0, 1fr));
           gap: 16px;
         }
 
@@ -1979,20 +1977,23 @@ export default function HomePage() {
         .week-grid {
           margin-top: 21px;
           display: grid;
-          grid-template-columns: repeat(7, minmax(0, 1fr));
+          grid-template-columns:
+            repeat(7, minmax(0, 1fr));
           gap: 9px;
         }
 
         .week-day {
           min-height: 210px;
           padding: 13px;
-          border: 1px solid var(--colour-border);
+          border: 1px solid
+            var(--colour-border);
           border-radius: 13px;
           background: var(--colour-slate-50);
         }
 
         .week-day-today {
-          border-color: rgba(37, 99, 235, 0.48);
+          border-color:
+            rgba(37, 99, 235, 0.48);
           background: var(--colour-blue-50);
         }
 
@@ -2034,11 +2035,13 @@ export default function HomePage() {
         }
 
         .day-status-completed i {
-          background: var(--colour-success-500);
+          background:
+            var(--colour-success-500);
         }
 
         .day-status-today i {
-          background: var(--colour-blue-600);
+          background:
+            var(--colour-blue-600);
         }
 
         .day-status-partial i {
@@ -2086,12 +2089,14 @@ export default function HomePage() {
         .completed-run {
           margin-top: 12px;
           padding-top: 11px;
-          border-top: 1px solid var(--colour-border);
+          border-top: 1px solid
+            var(--colour-border);
         }
 
         .completed-run span {
           display: block;
-          color: var(--colour-success-600);
+          color:
+            var(--colour-success-600);
           font-size: 9px;
           font-weight: 730;
           text-transform: uppercase;
@@ -2102,37 +2107,6 @@ export default function HomePage() {
           display: block;
           color: var(--colour-slate-950);
           font-size: 12px;
-        }
-
-        .week-review {
-          margin-top: 20px;
-          padding-top: 18px;
-          display: grid;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
-          gap: 12px;
-          border-top: 1px solid var(--colour-border);
-        }
-
-        .week-review div {
-          padding: 13px;
-          border-radius: 11px;
-          background: var(--colour-slate-50);
-        }
-
-        .week-review span {
-          display: block;
-          color: var(--colour-slate-500);
-          font-size: 8px;
-          font-weight: 740;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-        }
-
-        .week-review strong {
-          margin-top: 6px;
-          display: block;
-          color: var(--colour-slate-950);
-          font-size: 17px;
         }
 
         .latest-layout {
@@ -2159,7 +2133,8 @@ export default function HomePage() {
 
         .latest-stats {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns:
+            repeat(4, minmax(0, 1fr));
           gap: 10px;
         }
 
@@ -2193,15 +2168,13 @@ export default function HomePage() {
 
         @media (max-width: 1180px) {
           .metrics-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns:
+              repeat(2, minmax(0, 1fr));
           }
 
           .week-grid {
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-          }
-
-          .week-review {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns:
+              repeat(4, minmax(0, 1fr));
           }
         }
 
@@ -2232,11 +2205,8 @@ export default function HomePage() {
 
         @media (max-width: 680px) {
           .week-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .week-review {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns:
+              repeat(2, minmax(0, 1fr));
           }
 
           .latest-layout {
@@ -2244,7 +2214,8 @@ export default function HomePage() {
           }
 
           .latest-stats {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns:
+              repeat(2, minmax(0, 1fr));
           }
 
           .target-summary {
@@ -2260,8 +2231,7 @@ export default function HomePage() {
 
         @media (max-width: 460px) {
           .metrics-grid,
-          .latest-stats,
-          .week-review {
+          .latest-stats {
             grid-template-columns: 1fr;
           }
         }
