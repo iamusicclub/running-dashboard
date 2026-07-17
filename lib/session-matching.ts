@@ -781,7 +781,7 @@ function getStatusLabel(
     completed: "Completed",
     partial: "Partially completed",
     missed: "Missed",
-    pending: "Upcoming",
+    upcoming: "Upcoming",
     unverified: "Awaiting verification",
     rest: "Rest day observed",
   };
@@ -803,20 +803,20 @@ function getSessionStatus(
     if (runs.length === 0) {
       return session.plannedDate >
         todayKey
-        ? "pending"
+        ? "upcoming"
         : "rest";
     }
 
     return session.plannedDate >
       todayKey
-      ? "pending"
+      ? "upcoming"
       : "partial";
   }
 
   if (
     session.plannedDate > todayKey
   ) {
-    return "pending";
+    return "upcoming";
   }
 
   if (
@@ -851,7 +851,7 @@ function buildVerdict(
   session: MatchablePlannedSession,
   completedDistanceKm: number
 ) {
-  if (status === "pending") {
+  if (status === "upcoming") {
     return {
       verdict: "Session is still upcoming.",
       detail:
@@ -989,7 +989,7 @@ export function matchSessionToRuns(
       statusLabel:
         getStatusLabel(status),
       score:
-        status === "pending"
+        status === "upcoming"
           ? null
           : restScore,
       verdict: verdict.verdict,
@@ -1164,7 +1164,7 @@ export function matchSessionToRuns(
     statusLabel:
       getStatusLabel(status),
     score:
-      status === "pending" ||
+      status === "upcoming" ||
       status === "unverified"
         ? null
         : score,
@@ -1201,7 +1201,7 @@ export function calculateWeekExecution(
 ): WeekExecutionSummary {
   const dueMatches = matches.filter(
     (match) =>
-      match.status !== "pending" &&
+      match.status !== "upcoming" &&
       match.status !==
         "unverified"
   );
@@ -1273,7 +1273,7 @@ export function calculateWeekExecution(
       matches.filter(
         (match) =>
           match.status ===
-            "pending"
+            "upcoming
       ).length,
     unverifiedCount:
       matches.filter(
