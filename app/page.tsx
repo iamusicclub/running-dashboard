@@ -20,6 +20,11 @@ import {
 } from "../lib/session-matching";
 
 import {
+  calculateSub3Confidence,
+  type ConfidencePillar,
+} from "../lib/sub3-confidence";
+
+import {
   buildWeeklyTrainingAssessment,
   type WeeklyTrainingAssessment,
 } from "../lib/training-intelligence";
@@ -116,7 +121,9 @@ function secondsToTime(value: number | null) {
 
   const rounded = Math.round(value);
   const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
+  const minutes = Math.floor(
+    (rounded % 3600) / 60
+  );
   const seconds = rounded % 60;
 
   if (hours > 0) {
@@ -157,7 +164,9 @@ function parseDate(value: string) {
   const cleanValue = value.slice(0, 10);
   const date = new Date(`${cleanValue}T12:00:00`);
 
-  return Number.isNaN(date.getTime()) ? null : date;
+  return Number.isNaN(date.getTime())
+    ? null
+    : date;
 }
 
 function dateKey(date: Date) {
@@ -171,6 +180,7 @@ function dateKey(date: Date) {
 function startOfToday() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
   return today;
 }
 
@@ -196,11 +206,16 @@ function getDaysAgo(value: string) {
 
   if (!date) return 9999;
 
-  return getDaysBetween(startOfToday(), date);
+  return getDaysBetween(
+    startOfToday(),
+    date
+  );
 }
 
 function getDaysToRace() {
-  const raceDate = parseDate(MALAGA_RACE_DATE);
+  const raceDate = parseDate(
+    MALAGA_RACE_DATE
+  );
 
   if (!raceDate) return null;
 
@@ -211,7 +226,9 @@ function getDaysToRace() {
 }
 
 function getTrainingWeekNumber() {
-  const blockStart = parseDate(BLOCK_START_DATE);
+  const blockStart = parseDate(
+    BLOCK_START_DATE
+  );
 
   if (!blockStart) return 0;
 
@@ -223,7 +240,10 @@ function getTrainingWeekNumber() {
 
   const weekNumber =
     Math.floor(
-      getDaysBetween(today, blockStart) / 7
+      getDaysBetween(
+        today,
+        blockStart
+      ) / 7
     ) + 1;
 
   return Math.min(
@@ -239,6 +259,7 @@ function getTrainingPhase(
   if (weekNumber <= 4) return "Base";
   if (weekNumber <= 10) return "Quality";
   if (weekNumber <= 13) return "Sharpen";
+
   return "Taper";
 }
 
@@ -279,8 +300,11 @@ function getRunPaceSeconds(run: Run) {
     return run.paceSecondsPerKm;
   }
 
-  const distanceKm = getRunDistanceKm(run);
-  const timeSeconds = getRunTimeSeconds(run);
+  const distanceKm =
+    getRunDistanceKm(run);
+
+  const timeSeconds =
+    getRunTimeSeconds(run);
 
   if (!distanceKm || !timeSeconds) {
     return null;
@@ -294,11 +318,14 @@ function formatDisplayDate(value: string) {
 
   if (!date) return "Date not set";
 
-  return date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  return date.toLocaleDateString(
+    "en-GB",
+    {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }
+  );
 }
 
 function formatWeekLabel(
@@ -315,82 +342,6 @@ function formatWeekLabel(
   )}`;
 }
 
-function calculateEvidenceScore(
-  runs: Run[]
-) {
-  const recent28 = runs.filter((run) => {
-    const daysAgo = getDaysAgo(run.date);
-
-    return daysAgo >= 0 && daysAgo <= 28;
-  });
-
-  const recent42 = runs.filter((run) => {
-    const daysAgo = getDaysAgo(run.date);
-
-    return daysAgo >= 0 && daysAgo <= 42;
-  });
-
-  const averageWeeklyMileage =
-    recent28.reduce(
-      (sum, run) =>
-        sum + getRunDistanceKm(run),
-      0
-    ) / 4;
-
-  const longestRun = recent42.reduce(
-    (maximum, run) =>
-      Math.max(
-        maximum,
-        getRunDistanceKm(run)
-      ),
-    0
-  );
-
-  const qualityRunCount =
-    recent42.filter((run) =>
-      [
-        "tempo",
-        "threshold",
-        "interval",
-        "steady",
-        "race",
-        "long",
-        "long-run",
-        "marathon pace",
-        "marathon-pace",
-      ].includes(
-        (run.runType || "").toLowerCase()
-      )
-    ).length;
-
-  const consistencyScore = Math.min(
-    100,
-    (recent28.length / 16) * 100
-  );
-
-  const mileageScore = Math.min(
-    100,
-    (averageWeeklyMileage / 65) * 100
-  );
-
-  const enduranceScore = Math.min(
-    100,
-    (longestRun / 32) * 100
-  );
-
-  const qualityScore = Math.min(
-    100,
-    (qualityRunCount / 6) * 100
-  );
-
-  return Math.round(
-    consistencyScore * 0.25 +
-      mileageScore * 0.3 +
-      enduranceScore * 0.3 +
-      qualityScore * 0.15
-  );
-}
-
 function getMonday(date: Date) {
   const result = new Date(date);
   const currentDay = result.getDay();
@@ -401,6 +352,7 @@ function getMonday(date: Date) {
       : 1 - currentDay;
 
   result.setHours(0, 0, 0, 0);
+
   result.setDate(
     result.getDate() + offset
   );
@@ -433,8 +385,10 @@ function findCurrentTrainingWeek(
   return (
     weeks.find(
       (week) =>
-        todayKey >= week.weekStartingDate &&
-        todayKey <= week.weekEndingDate
+        todayKey >=
+          week.weekStartingDate &&
+        todayKey <=
+          week.weekEndingDate
     ) || null
   );
 }
@@ -505,6 +459,64 @@ function getScoreToneClass(
   return "execution-score-warning";
 }
 
+function getConfidenceBadgeClass(
+  score: number
+) {
+  if (score >= 80) {
+    return "status-badge-success";
+  }
+
+  if (score >= 65) {
+    return "status-badge-primary";
+  }
+
+  if (score >= 50) {
+    return "status-badge-warning";
+  }
+
+  return "status-badge-danger";
+}
+
+function getConfidenceStatusLabel(
+  score: number
+) {
+  if (score >= 90) {
+    return "Very high confidence";
+  }
+
+  if (score >= 80) {
+    return "On track";
+  }
+
+  if (score >= 65) {
+    return "Goal remains realistic";
+  }
+
+  if (score >= 50) {
+    return "Building";
+  }
+
+  return "Evidence developing";
+}
+
+function getPillarToneClass(
+  pillar: ConfidencePillar
+) {
+  if (pillar.score >= 85) {
+    return "confidence-pillar-strong";
+  }
+
+  if (pillar.score >= 70) {
+    return "confidence-pillar-positive";
+  }
+
+  if (pillar.score >= 50) {
+    return "confidence-pillar-developing";
+  }
+
+  return "confidence-pillar-risk";
+}
+
 function MetricCard({
   label,
   value,
@@ -516,8 +528,14 @@ function MetricCard({
 }) {
   return (
     <article className="surface-card metric-card">
-      <p className="metric-label">{label}</p>
-      <p className="metric-value">{value}</p>
+      <p className="metric-label">
+        {label}
+      </p>
+
+      <p className="metric-value">
+        {value}
+      </p>
+
       <p className="metric-context">
         {context}
       </p>
@@ -527,8 +545,11 @@ function MetricCard({
 
 export default function HomePage() {
   const [runs, setRuns] = useState<Run[]>([]);
-  const [trainingWeeks, setTrainingWeeks] =
-    useState<TrainingWeek[]>([]);
+
+  const [
+    trainingWeeks,
+    setTrainingWeeks,
+  ] = useState<TrainingWeek[]>([]);
 
   const [loading, setLoading] =
     useState(true);
@@ -586,7 +607,8 @@ export default function HomePage() {
         const loadedRuns: Run[] =
           runsSnapshot.docs.map(
             (document) => {
-              const data = document.data();
+              const data =
+                document.data();
 
               return {
                 id: document.id,
@@ -694,7 +716,10 @@ export default function HomePage() {
   );
 
   const runsByDate = useMemo(() => {
-    const map = new Map<string, Run[]>();
+    const map = new Map<
+      string,
+      Run[]
+    >();
 
     runs.forEach((run) => {
       const key = run.date.slice(0, 10);
@@ -781,7 +806,8 @@ export default function HomePage() {
     }
 
     return runs.filter((run) => {
-      const runDate = run.date.slice(0, 10);
+      const runDate =
+        run.date.slice(0, 10);
 
       return (
         runDate >=
@@ -808,11 +834,32 @@ export default function HomePage() {
       ]
     );
 
+  const sub3Confidence = useMemo(
+    () =>
+      calculateSub3Confidence({
+        runs,
+        sessionMatches: weeklyMatches,
+        plannedSessions:
+          currentTrainingWeek?.sessions ||
+          [],
+        predictedMarathonSeconds: null,
+        raceDate: MALAGA_RACE_DATE,
+        today: todayKey,
+      }),
+    [
+      runs,
+      weeklyMatches,
+      currentTrainingWeek,
+      todayKey,
+    ]
+  );
+
   const latestRun = runs[0] || null;
 
   const recent28DayRuns = runs.filter(
     (run) => {
-      const daysAgo = getDaysAgo(run.date);
+      const daysAgo =
+        getDaysAgo(run.date);
 
       return (
         daysAgo >= 0 &&
@@ -847,11 +894,9 @@ export default function HomePage() {
       0
     );
 
-  const evidenceScore =
-    calculateEvidenceScore(runs);
-
   const targetSeconds =
-    timeToSeconds(TARGET_TIME) || 10799;
+    timeToSeconds(TARGET_TIME) ||
+    10799;
 
   const targetPace = formatPace(
     targetSeconds /
@@ -867,13 +912,17 @@ export default function HomePage() {
       trainingWeekNumber
     );
 
-  const daysToRace = getDaysToRace();
+  const daysToRace =
+    getDaysToRace();
 
   if (loading) {
     return (
       <div className="loading-state">
         <div className="loading-spinner" />
-        <p>Loading Project Sub-3...</p>
+
+        <p>
+          Loading Project Sub-3...
+        </p>
       </div>
     );
   }
@@ -918,9 +967,9 @@ export default function HomePage() {
 
             <p className="hero-description">
               Execute the coach&apos;s plan,
-              develop marathon-specific endurance
-              and arrive in Málaga ready to run
-              under three hours.
+              develop marathon-specific
+              endurance and arrive in Málaga
+              ready to run under three hours.
             </p>
           </div>
 
@@ -951,41 +1000,43 @@ export default function HomePage() {
         <div className="hero-footer">
           <div className="hero-status">
             <span
-              className={`status-badge ${
-                evidenceScore >= 70
-                  ? "status-badge-success"
-                  : evidenceScore >= 50
-                  ? "status-badge-primary"
-                  : "status-badge-warning"
-              }`}
+              className={`status-badge ${getConfidenceBadgeClass(
+                sub3Confidence.score
+              )}`}
             >
-              {evidenceScore >= 70
-                ? "On track"
-                : evidenceScore >= 50
-                ? "Building"
-                : "Evidence developing"}
+              {getConfidenceStatusLabel(
+                sub3Confidence.score
+              )}
             </span>
 
             <p>
-              The current evidence score combines
-              recent consistency, mileage,
-              quality work and long-run progression.
+              {sub3Confidence.summary}
             </p>
           </div>
 
           <div className="target-summary">
             <div>
               <span>Target</span>
-              <strong>{TARGET_TIME}</strong>
+
+              <strong>
+                {TARGET_TIME}
+              </strong>
             </div>
 
             <div>
-              <span>Required pace</span>
-              <strong>{targetPace}</strong>
+              <span>
+                Required pace
+              </span>
+
+              <strong>
+                {targetPace}
+              </strong>
             </div>
 
             <div>
-              <span>Training block</span>
+              <span>
+                Training block
+              </span>
 
               <strong>
                 {trainingWeekNumber > 0
@@ -1047,13 +1098,18 @@ export default function HomePage() {
                 {todaySession.rawText
                   .split("\n")
                   .filter(Boolean)
-                  .map((line, index) => (
-                    <p
-                      key={`${line}-${index}`}
-                    >
-                      {line}
-                    </p>
-                  ))}
+                  .map(
+                    (
+                      line,
+                      index
+                    ) => (
+                      <p
+                        key={`${line}-${index}`}
+                      >
+                        {line}
+                      </p>
+                    )
+                  )}
               </div>
 
               {todaySession.targetPaceText && (
@@ -1117,30 +1173,36 @@ export default function HomePage() {
                       (component) =>
                         component.available
                     )
-                    .map((component) => (
-                      <div
-                        key={component.key}
-                        className="execution-component"
-                      >
-                        <div>
-                          <span>
-                            {component.label}
-                          </span>
+                    .map(
+                      (component) => (
+                        <div
+                          key={
+                            component.key
+                          }
+                          className="execution-component"
+                        >
+                          <div>
+                            <span>
+                              {
+                                component.label
+                              }
+                            </span>
 
-                          <strong>
-                            {
-                              component.explanation
-                            }
-                          </strong>
+                            <strong>
+                              {
+                                component.explanation
+                              }
+                            </strong>
+                          </div>
+
+                          <b>
+                            {Math.round(
+                              component.score
+                            )}
+                          </b>
                         </div>
-
-                        <b>
-                          {Math.round(
-                            component.score
-                          )}
-                        </b>
-                      </div>
-                    ))}
+                      )
+                    )}
                 </div>
               )}
             </div>
@@ -1152,8 +1214,9 @@ export default function HomePage() {
 
               <p>
                 The current week exists in
-                Google Sheets, but today&apos;s
-                session has not yet been populated.
+                Google Sheets, but
+                today&apos;s session has not
+                yet been populated.
               </p>
             </div>
           ) : (
@@ -1163,8 +1226,8 @@ export default function HomePage() {
               </h3>
 
               <p>
-                No coach-plan week currently covers
-                today&apos;s date.
+                No coach-plan week currently
+                covers today&apos;s date.
               </p>
             </div>
           )}
@@ -1178,9 +1241,17 @@ export default function HomePage() {
               </p>
 
               <h2>
-                Evidence for Sub-3
+                Sub-3 Confidence
               </h2>
             </div>
+
+            <span
+              className={`status-badge ${getConfidenceBadgeClass(
+                sub3Confidence.score
+              )}`}
+            >
+              {sub3Confidence.label}
+            </span>
           </div>
 
           <div
@@ -1189,10 +1260,12 @@ export default function HomePage() {
               background: `conic-gradient(
                 #2563eb 0deg,
                 #2563eb ${
-                  evidenceScore * 3.6
+                  sub3Confidence.score *
+                  3.6
                 }deg,
                 #e2e8f0 ${
-                  evidenceScore * 3.6
+                  sub3Confidence.score *
+                  3.6
                 }deg,
                 #e2e8f0 360deg
               )`,
@@ -1200,19 +1273,120 @@ export default function HomePage() {
           >
             <div>
               <strong>
-                {evidenceScore}
+                {sub3Confidence.score}
               </strong>
+
               <span>/100</span>
             </div>
           </div>
 
           <p className="score-summary">
-            {evidenceScore >= 75
-              ? "Strong foundations are in place."
-              : evidenceScore >= 55
-              ? "The evidence base is moving in the right direction."
-              : "The marathon block should strengthen this score."}
+            {sub3Confidence.summary}
           </p>
+
+          <div className="confidence-highlights">
+            <div>
+              <span>
+                Biggest strength
+              </span>
+
+              <strong>
+                {
+                  sub3Confidence.biggestStrength
+                }
+              </strong>
+            </div>
+
+            <div>
+              <span>
+                Biggest risk
+              </span>
+
+              <strong>
+                {
+                  sub3Confidence.biggestRisk
+                }
+              </strong>
+            </div>
+
+            <div>
+              <span>
+                Next milestone
+              </span>
+
+              <strong>
+                {
+                  sub3Confidence.nextMilestone
+                }
+              </strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="surface-card evidence-card">
+        <div className="section-header">
+          <div>
+            <p className="section-label">
+              Transparent scoring
+            </p>
+
+            <h2>
+              Evidence behind the confidence
+            </h2>
+          </div>
+
+          <strong className="evidence-total">
+            {sub3Confidence.score}/100
+          </strong>
+        </div>
+
+        <div className="confidence-pillars">
+          {sub3Confidence.pillars.map(
+            (pillar) => (
+              <article
+                key={pillar.key}
+                className={`confidence-pillar ${getPillarToneClass(
+                  pillar
+                )}`}
+              >
+                <div className="confidence-pillar-heading">
+                  <div>
+                    <span>
+                      {pillar.label}
+                    </span>
+
+                    <strong>
+                      {pillar.score}
+                    </strong>
+                  </div>
+
+                  <small>
+                    {Math.round(
+                      pillar.weight * 100
+                    )}
+                    % weight
+                  </small>
+                </div>
+
+                <div className="confidence-progress">
+                  <i
+                    style={{
+                      width: `${pillar.score}%`,
+                    }}
+                  />
+                </div>
+
+                <h3>
+                  {pillar.headline}
+                </h3>
+
+                <p>
+                  {pillar.detail}
+                </p>
+              </article>
+            )
+          )}
         </div>
       </section>
 
@@ -1283,109 +1457,126 @@ export default function HomePage() {
         </div>
 
         <div className="week-grid">
-          {currentWeekDates.map((date) => {
-            const key = dateKey(date);
+          {currentWeekDates.map(
+            (date) => {
+              const key = dateKey(date);
 
-            const plannedSession =
-              sessionsByDate.get(key) || null;
+              const plannedSession =
+                sessionsByDate.get(key) ||
+                null;
 
-            const dayRuns =
-              runsByDate.get(key) || [];
+              const dayRuns =
+                runsByDate.get(key) ||
+                [];
 
-            const matchResult =
-              matchesByDate.get(key) || null;
+              const matchResult =
+                matchesByDate.get(key) ||
+                null;
 
-            const isToday =
-              key === todayKey;
+              const isToday =
+                key === todayKey;
 
-            return (
-              <article
-                key={key}
-                className={`week-day ${
-                  isToday
-                    ? "week-day-today"
-                    : ""
-                }`}
-              >
-                <div className="week-day-heading">
-                  <span>
-                    {date.toLocaleDateString(
-                      "en-GB",
-                      {
-                        weekday: "short",
-                      }
-                    )}
-                  </span>
-
-                  <strong>
-                    {date.getDate()}
-                  </strong>
-                </div>
-
-                <div
-                  className={`day-status ${getMatchStatusClass(
-                    matchResult
-                  )}`}
+              return (
+                <article
+                  key={key}
+                  className={`week-day ${
+                    isToday
+                      ? "week-day-today"
+                      : ""
+                  }`}
                 >
-                  <i />
+                  <div className="week-day-heading">
+                    <span>
+                      {date.toLocaleDateString(
+                        "en-GB",
+                        {
+                          weekday:
+                            "short",
+                        }
+                      )}
+                    </span>
 
-                  {matchResult
-                    ? matchResult.statusLabel
-                    : plannedSession
-                    ? "Awaiting assessment"
-                    : "Awaiting plan"}
-                </div>
+                    <strong>
+                      {date.getDate()}
+                    </strong>
+                  </div>
 
-                <p className="planned-title">
+                  <div
+                    className={`day-status ${getMatchStatusClass(
+                      matchResult
+                    )}`}
+                  >
+                    <i />
+
+                    {matchResult
+                      ? matchResult.statusLabel
+                      : plannedSession
+                      ? "Awaiting assessment"
+                      : "Awaiting plan"}
+                  </div>
+
+                  <p className="planned-title">
+                    {plannedSession
+                      ? plannedSession.title
+                      : "Awaiting plan"}
+                  </p>
+
                   {plannedSession
-                    ? plannedSession.title
-                    : "Awaiting plan"}
-                </p>
+                    ?.distance.display && (
+                    <small>
+                      {
+                        plannedSession
+                          .distance.display
+                      }
+                    </small>
+                  )}
 
-                {plannedSession?.distance
-                  .display && (
-                  <small>
-                    {
-                      plannedSession.distance
-                        .display
-                    }
-                  </small>
-                )}
+                  {matchResult?.score !==
+                    null &&
+                    matchResult?.score !==
+                      undefined && (
+                      <div className="day-execution-score">
+                        <span>
+                          Execution
+                        </span>
 
-                {matchResult?.score !== null &&
-                  matchResult?.score !==
-                    undefined && (
-                    <div className="day-execution-score">
-                      <span>Execution</span>
+                        <strong>
+                          {
+                            matchResult.score
+                          }
+                          %
+                        </strong>
+                      </div>
+                    )}
+
+                  {dayRuns.length > 0 && (
+                    <div className="completed-run">
+                      <span>
+                        Strava
+                      </span>
 
                       <strong>
-                        {matchResult.score}%
+                        {dayRuns
+                          .reduce(
+                            (
+                              sum,
+                              run
+                            ) =>
+                              sum +
+                              getRunDistanceKm(
+                                run
+                              ),
+                            0
+                          )
+                          .toFixed(1)}{" "}
+                        km
                       </strong>
                     </div>
                   )}
-
-                {dayRuns.length > 0 && (
-                  <div className="completed-run">
-                    <span>Strava</span>
-
-                    <strong>
-                      {dayRuns
-                        .reduce(
-                          (sum, run) =>
-                            sum +
-                            getRunDistanceKm(
-                              run
-                            ),
-                          0
-                        )
-                        .toFixed(1)}{" "}
-                      km
-                    </strong>
-                  </div>
-                )}
-              </article>
-            );
-          })}
+                </article>
+              );
+            }
+          )}
         </div>
       </section>
 
@@ -1404,7 +1595,9 @@ export default function HomePage() {
               Most recent activity
             </p>
 
-            <h2>Latest Strava run</h2>
+            <h2>
+              Latest Strava run
+            </h2>
           </div>
 
           <Link
@@ -1419,7 +1612,8 @@ export default function HomePage() {
           <div className="latest-layout">
             <div className="latest-heading">
               <span className="status-badge status-badge-primary">
-                {latestRun.runType || "Run"}
+                {latestRun.runType ||
+                  "Run"}
               </span>
 
               <h3>
@@ -1471,7 +1665,9 @@ export default function HomePage() {
               </div>
 
               <div>
-                <span>Average HR</span>
+                <span>
+                  Average HR
+                </span>
 
                 <strong>
                   {latestRun.averageHeartrate ||
@@ -1484,8 +1680,8 @@ export default function HomePage() {
         ) : (
           <div className="empty-session">
             <p>
-              No Strava run data is currently
-              available.
+              No Strava run data is
+              currently available.
             </p>
           </div>
         )}
@@ -1502,7 +1698,9 @@ export default function HomePage() {
           place-items: center;
           align-content: center;
           gap: 14px;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
         }
 
         .loading-state p {
@@ -1517,7 +1715,8 @@ export default function HomePage() {
           border-top-color:
             var(--colour-blue-600);
           border-radius: 999px;
-          animation: spin 800ms linear infinite;
+          animation: spin 800ms
+            linear infinite;
         }
 
         .error-card {
@@ -1535,20 +1734,27 @@ export default function HomePage() {
         .error-card p:last-child {
           max-width: 700px;
           margin: 0;
-          color: var(--colour-slate-300);
+          color: var(
+            --colour-slate-300
+          );
         }
 
         .plan-warning {
           padding: 13px 15px;
           color: #92400e;
-          border: 1px solid #fde68a;
+          border: 1px solid
+            #fde68a;
           border-radius: 11px;
           background: #fffbeb;
           font-size: 12px;
         }
 
         .hero-card {
-          padding: clamp(24px, 3vw, 36px);
+          padding: clamp(
+            24px,
+            3vw,
+            36px
+          );
         }
 
         .hero-main {
@@ -1560,7 +1766,9 @@ export default function HomePage() {
 
         .hero-kicker {
           margin: 0;
-          color: var(--colour-blue-400);
+          color: var(
+            --colour-blue-400
+          );
           font-size: 11px;
           font-weight: 780;
           letter-spacing: 0.13em;
@@ -1569,7 +1777,9 @@ export default function HomePage() {
 
         .hero-kicker span {
           margin: 0 7px;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
         }
 
         .hero-card h1 {
@@ -1588,7 +1798,9 @@ export default function HomePage() {
         .hero-description {
           max-width: 700px;
           margin: 17px 0 0;
-          color: var(--colour-slate-300);
+          color: var(
+            --colour-slate-300
+          );
           line-height: 1.7;
         }
 
@@ -1596,15 +1808,26 @@ export default function HomePage() {
           min-width: 190px;
           padding: 19px;
           border: 1px solid
-            rgba(96, 165, 250, 0.24);
+            rgba(
+              96,
+              165,
+              250,
+              0.24
+            );
           border-radius: 15px;
-          background:
-            rgba(255, 255, 255, 0.045);
+          background: rgba(
+            255,
+            255,
+            255,
+            0.045
+          );
         }
 
         .countdown-card > p {
           margin: 0;
-          color: var(--colour-slate-400);
+          color: var(
+            --colour-slate-400
+          );
           font-size: 10px;
           font-weight: 760;
           letter-spacing: 0.09em;
@@ -1627,7 +1850,9 @@ export default function HomePage() {
 
         .countdown-value span {
           padding-bottom: 6px;
-          color: var(--colour-blue-400);
+          color: var(
+            --colour-blue-400
+          );
           font-size: 11px;
           font-weight: 750;
           text-transform: uppercase;
@@ -1636,7 +1861,9 @@ export default function HomePage() {
         .countdown-card small {
           margin-top: 12px;
           display: block;
-          color: var(--colour-slate-400);
+          color: var(
+            --colour-slate-400
+          );
         }
 
         .hero-footer {
@@ -1644,10 +1871,16 @@ export default function HomePage() {
           padding-top: 22px;
           display: flex;
           align-items: flex-end;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 24px;
           border-top: 1px solid
-            rgba(148, 163, 184, 0.14);
+            rgba(
+              148,
+              163,
+              184,
+              0.14
+            );
         }
 
         .hero-status {
@@ -1656,7 +1889,9 @@ export default function HomePage() {
 
         .hero-status p {
           margin: 11px 0 0;
-          color: var(--colour-slate-300);
+          color: var(
+            --colour-slate-300
+          );
           line-height: 1.6;
         }
 
@@ -1668,7 +1903,9 @@ export default function HomePage() {
 
         .target-summary span {
           display: block;
-          color: var(--colour-slate-400);
+          color: var(
+            --colour-slate-400
+          );
           font-size: 9px;
           font-weight: 740;
           letter-spacing: 0.08em;
@@ -1685,13 +1922,14 @@ export default function HomePage() {
         .headline-grid {
           display: grid;
           grid-template-columns:
-            minmax(0, 1.35fr)
-            minmax(280px, 0.65fr);
+            minmax(0, 1.2fr)
+            minmax(340px, 0.8fr);
           gap: 20px;
         }
 
         .today-card,
         .score-card,
+        .evidence-card,
         .week-card,
         .latest-card {
           padding: 22px;
@@ -1700,13 +1938,16 @@ export default function HomePage() {
         .section-header {
           display: flex;
           align-items: flex-start;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 16px;
         }
 
         .section-header h2 {
           margin: 5px 0 0;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 20px;
           font-weight: 730;
           letter-spacing: -0.025em;
@@ -1720,7 +1961,9 @@ export default function HomePage() {
         .today-session h3,
         .empty-session h3 {
           margin: 0;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: clamp(
             25px,
             4vw,
@@ -1732,7 +1975,9 @@ export default function HomePage() {
 
         .session-distance {
           margin: 8px 0 0;
-          color: var(--colour-blue-600);
+          color: var(
+            --colour-blue-600
+          );
           font-size: 18px;
           font-weight: 730;
         }
@@ -1741,12 +1986,16 @@ export default function HomePage() {
           margin-top: 20px;
           padding: 17px;
           border-radius: 13px;
-          background: var(--colour-slate-50);
+          background: var(
+            --colour-slate-50
+          );
         }
 
         .coach-instructions p {
           margin: 0 0 6px;
-          color: var(--colour-slate-700);
+          color: var(
+            --colour-slate-700
+          );
         }
 
         .coach-instructions p:last-child {
@@ -1757,12 +2006,15 @@ export default function HomePage() {
           margin-top: 14px;
           display: flex;
           align-items: center;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 14px;
         }
 
         .session-target span {
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 10px;
           font-weight: 730;
           letter-spacing: 0.08em;
@@ -1770,7 +2022,9 @@ export default function HomePage() {
         }
 
         .session-target strong {
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
         }
 
         .execution-panel {
@@ -1785,13 +2039,16 @@ export default function HomePage() {
         .execution-panel-heading {
           display: flex;
           align-items: center;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 16px;
         }
 
         .execution-panel-heading span {
           display: block;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 9px;
           font-weight: 750;
           letter-spacing: 0.08em;
@@ -1801,7 +2058,9 @@ export default function HomePage() {
         .execution-panel-heading strong {
           margin-top: 5px;
           display: block;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 17px;
         }
 
@@ -1842,13 +2101,17 @@ export default function HomePage() {
 
         .execution-verdict {
           margin: 16px 0 0;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-weight: 720;
         }
 
         .execution-detail {
           margin: 7px 0 0;
-          color: var(--colour-slate-600);
+          color: var(
+            --colour-slate-600
+          );
           line-height: 1.6;
         }
 
@@ -1857,7 +2120,8 @@ export default function HomePage() {
           padding-top: 13px;
           display: flex;
           align-items: flex-start;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 14px;
           border-top: 1px solid
             var(--colour-border);
@@ -1865,7 +2129,9 @@ export default function HomePage() {
 
         .execution-component span {
           display: block;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 9px;
           font-weight: 750;
           letter-spacing: 0.06em;
@@ -1875,21 +2141,27 @@ export default function HomePage() {
         .execution-component strong {
           margin-top: 4px;
           display: block;
-          color: var(--colour-slate-700);
+          color: var(
+            --colour-slate-700
+          );
           font-size: 11px;
           font-weight: 550;
           line-height: 1.5;
         }
 
         .execution-component b {
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 14px;
         }
 
         .empty-session p {
           max-width: 650px;
           margin: 11px 0 0;
-          color: var(--colour-slate-600);
+          color: var(
+            --colour-slate-600
+          );
           line-height: 1.65;
         }
 
@@ -1924,7 +2196,9 @@ export default function HomePage() {
         }
 
         .score-ring strong {
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 52px;
           letter-spacing: -0.065em;
           line-height: 0.9;
@@ -1932,23 +2206,192 @@ export default function HomePage() {
 
         .score-ring span {
           margin-top: 8px;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 11px;
           font-weight: 680;
         }
 
         .score-summary {
-          max-width: 270px;
+          max-width: 330px;
           margin: 20px 0 0;
-          color: var(--colour-slate-600);
+          color: var(
+            --colour-slate-600
+          );
           text-align: center;
           line-height: 1.6;
+        }
+
+        .confidence-highlights {
+          width: 100%;
+          margin-top: 22px;
+          display: grid;
+          gap: 9px;
+        }
+
+        .confidence-highlights > div {
+          padding: 12px 13px;
+          border-radius: 11px;
+          background: var(
+            --colour-slate-50
+          );
+        }
+
+        .confidence-highlights span {
+          display: block;
+          color: var(
+            --colour-slate-500
+          );
+          font-size: 8px;
+          font-weight: 750;
+          letter-spacing: 0.07em;
+          text-transform: uppercase;
+        }
+
+        .confidence-highlights strong {
+          margin-top: 5px;
+          display: block;
+          color: var(
+            --colour-slate-950
+          );
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .evidence-total {
+          color: var(
+            --colour-blue-600
+          );
+          font-size: 25px;
+          letter-spacing: -0.04em;
+        }
+
+        .confidence-pillars {
+          margin-top: 20px;
+          display: grid;
+          grid-template-columns:
+            repeat(
+              3,
+              minmax(0, 1fr)
+            );
+          gap: 12px;
+        }
+
+        .confidence-pillar {
+          padding: 16px;
+          border: 1px solid
+            var(--colour-border);
+          border-radius: 13px;
+          background: var(
+            --colour-slate-50
+          );
+        }
+
+        .confidence-pillar-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content:
+            space-between;
+          gap: 12px;
+        }
+
+        .confidence-pillar-heading span {
+          display: block;
+          color: var(
+            --colour-slate-600
+          );
+          font-size: 10px;
+          font-weight: 720;
+        }
+
+        .confidence-pillar-heading strong {
+          margin-top: 4px;
+          display: block;
+          color: var(
+            --colour-slate-950
+          );
+          font-size: 26px;
+          letter-spacing: -0.04em;
+        }
+
+        .confidence-pillar-heading small {
+          color: var(
+            --colour-slate-500
+          );
+          font-size: 8px;
+          font-weight: 680;
+          text-transform: uppercase;
+        }
+
+        .confidence-progress {
+          height: 6px;
+          margin-top: 13px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: var(
+            --colour-slate-200
+          );
+        }
+
+        .confidence-progress i {
+          height: 100%;
+          display: block;
+          border-radius: inherit;
+          background: var(
+            --colour-blue-600
+          );
+        }
+
+        .confidence-pillar-strong
+          .confidence-progress
+          i {
+          background: #16a34a;
+        }
+
+        .confidence-pillar-positive
+          .confidence-progress
+          i {
+          background: #2563eb;
+        }
+
+        .confidence-pillar-developing
+          .confidence-progress
+          i {
+          background: #f59e0b;
+        }
+
+        .confidence-pillar-risk
+          .confidence-progress
+          i {
+          background: #dc2626;
+        }
+
+        .confidence-pillar h3 {
+          margin: 15px 0 0;
+          color: var(
+            --colour-slate-950
+          );
+          font-size: 12px;
+          line-height: 1.4;
+        }
+
+        .confidence-pillar p {
+          margin: 7px 0 0;
+          color: var(
+            --colour-slate-600
+          );
+          font-size: 10px;
+          line-height: 1.55;
         }
 
         .metrics-grid {
           display: grid;
           grid-template-columns:
-            repeat(4, minmax(0, 1fr));
+            repeat(
+              4,
+              minmax(0, 1fr)
+            );
           gap: 16px;
         }
 
@@ -1957,7 +2400,8 @@ export default function HomePage() {
           padding: 20px;
         }
 
-        .metric-card .metric-value {
+        .metric-card
+          .metric-value {
           margin: 17px 0 8px;
         }
 
@@ -1978,7 +2422,10 @@ export default function HomePage() {
           margin-top: 21px;
           display: grid;
           grid-template-columns:
-            repeat(7, minmax(0, 1fr));
+            repeat(
+              7,
+              minmax(0, 1fr)
+            );
           gap: 9px;
         }
 
@@ -1988,23 +2435,34 @@ export default function HomePage() {
           border: 1px solid
             var(--colour-border);
           border-radius: 13px;
-          background: var(--colour-slate-50);
+          background: var(
+            --colour-slate-50
+          );
         }
 
         .week-day-today {
-          border-color:
-            rgba(37, 99, 235, 0.48);
-          background: var(--colour-blue-50);
+          border-color: rgba(
+            37,
+            99,
+            235,
+            0.48
+          );
+          background: var(
+            --colour-blue-50
+          );
         }
 
         .week-day-heading {
           display: flex;
           align-items: baseline;
-          justify-content: space-between;
+          justify-content:
+            space-between;
         }
 
         .week-day-heading span {
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 10px;
           font-weight: 760;
           letter-spacing: 0.07em;
@@ -2012,7 +2470,9 @@ export default function HomePage() {
         }
 
         .week-day-heading strong {
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 22px;
         }
 
@@ -2021,7 +2481,9 @@ export default function HomePage() {
           display: flex;
           align-items: center;
           gap: 6px;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 9px;
           font-weight: 690;
           text-transform: uppercase;
@@ -2031,17 +2493,21 @@ export default function HomePage() {
           width: 7px;
           height: 7px;
           border-radius: 999px;
-          background: var(--colour-slate-300);
+          background: var(
+            --colour-slate-300
+          );
         }
 
         .day-status-completed i {
-          background:
-            var(--colour-success-500);
+          background: var(
+            --colour-success-500
+          );
         }
 
         .day-status-today i {
-          background:
-            var(--colour-blue-600);
+          background: var(
+            --colour-blue-600
+          );
         }
 
         .day-status-partial i {
@@ -2054,7 +2520,9 @@ export default function HomePage() {
 
         .planned-title {
           margin: 13px 0 0;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 11px;
           font-weight: 680;
           line-height: 1.4;
@@ -2063,26 +2531,33 @@ export default function HomePage() {
         .week-day small {
           margin-top: 5px;
           display: block;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
         }
 
         .day-execution-score {
           margin-top: 14px;
           display: flex;
           align-items: baseline;
-          justify-content: space-between;
+          justify-content:
+            space-between;
           gap: 10px;
         }
 
         .day-execution-score span {
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 8px;
           font-weight: 730;
           text-transform: uppercase;
         }
 
         .day-execution-score strong {
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 13px;
         }
 
@@ -2095,8 +2570,9 @@ export default function HomePage() {
 
         .completed-run span {
           display: block;
-          color:
-            var(--colour-success-600);
+          color: var(
+            --colour-success-600
+          );
           font-size: 9px;
           font-weight: 730;
           text-transform: uppercase;
@@ -2105,7 +2581,9 @@ export default function HomePage() {
         .completed-run strong {
           margin-top: 4px;
           display: block;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 12px;
         }
 
@@ -2121,32 +2599,43 @@ export default function HomePage() {
 
         .latest-heading h3 {
           margin: 13px 0 0;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 24px;
           letter-spacing: -0.035em;
         }
 
         .latest-heading p {
           margin: 5px 0 0;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
         }
 
         .latest-stats {
           display: grid;
           grid-template-columns:
-            repeat(4, minmax(0, 1fr));
+            repeat(
+              4,
+              minmax(0, 1fr)
+            );
           gap: 10px;
         }
 
         .latest-stats div {
           padding: 14px;
           border-radius: 11px;
-          background: var(--colour-slate-50);
+          background: var(
+            --colour-slate-50
+          );
         }
 
         .latest-stats span {
           display: block;
-          color: var(--colour-slate-500);
+          color: var(
+            --colour-slate-500
+          );
           font-size: 9px;
           font-weight: 730;
           letter-spacing: 0.06em;
@@ -2156,29 +2645,51 @@ export default function HomePage() {
         .latest-stats strong {
           margin-top: 6px;
           display: block;
-          color: var(--colour-slate-950);
+          color: var(
+            --colour-slate-950
+          );
           font-size: 14px;
         }
 
         @keyframes spin {
           to {
-            transform: rotate(360deg);
+            transform: rotate(
+              360deg
+            );
           }
         }
 
-        @media (max-width: 1180px) {
+        @media (
+          max-width: 1180px
+        ) {
           .metrics-grid {
             grid-template-columns:
-              repeat(2, minmax(0, 1fr));
+              repeat(
+                2,
+                minmax(0, 1fr)
+              );
+          }
+
+          .confidence-pillars {
+            grid-template-columns:
+              repeat(
+                2,
+                minmax(0, 1fr)
+              );
           }
 
           .week-grid {
             grid-template-columns:
-              repeat(4, minmax(0, 1fr));
+              repeat(
+                4,
+                minmax(0, 1fr)
+              );
           }
         }
 
-        @media (max-width: 900px) {
+        @media (
+          max-width: 900px
+        ) {
           .headline-grid {
             grid-template-columns: 1fr;
           }
@@ -2198,15 +2709,25 @@ export default function HomePage() {
 
           .target-summary {
             width: 100%;
-            justify-content: space-between;
+            justify-content:
+              space-between;
             text-align: left;
           }
         }
 
-        @media (max-width: 680px) {
+        @media (
+          max-width: 680px
+        ) {
+          .confidence-pillars {
+            grid-template-columns: 1fr;
+          }
+
           .week-grid {
             grid-template-columns:
-              repeat(2, minmax(0, 1fr));
+              repeat(
+                2,
+                minmax(0, 1fr)
+              );
           }
 
           .latest-layout {
@@ -2215,7 +2736,10 @@ export default function HomePage() {
 
           .latest-stats {
             grid-template-columns:
-              repeat(2, minmax(0, 1fr));
+              repeat(
+                2,
+                minmax(0, 1fr)
+              );
           }
 
           .target-summary {
@@ -2229,7 +2753,9 @@ export default function HomePage() {
           }
         }
 
-        @media (max-width: 460px) {
+        @media (
+          max-width: 460px
+        ) {
           .metrics-grid,
           .latest-stats {
             grid-template-columns: 1fr;
