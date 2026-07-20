@@ -336,68 +336,214 @@ function normaliseSessionType(value: string) {
 }
 
 function classifyRun(run: MatchableRun) {
-  const text = normaliseText(
-    [run.runType, run.name, run.notes]
-      .filter(Boolean)
-      .join(" ")
-  );
+
+  const recordedType =
+    normaliseSessionType(
+      run.runType
+    );
+
+  const recognisedTypes =
+    new Set([
+      "recovery",
+      "easy",
+      "steady",
+      "tempo",
+      "threshold",
+      "interval",
+      "marathon-pace",
+      "long-run",
+      "race",
+      "cross-training",
+    ]);
 
   if (
-    /\b(race|parkrun|time trial)\b/.test(text)
-  ) {
-    return "race";
-  }
-
-  if (
-    /\b(interval|repetition|reps|track|vo2|400m|600m|800m|1k reps)\b/.test(
-      text
+    recognisedTypes.has(
+      recordedType
     )
   ) {
-    return "interval";
+    return recordedType;
   }
 
-  if (/\bthreshold\b/.test(text)) {
-    return "threshold";
+  const distanceKm = getRunDistanceKm(run);
+
+  const paceSecondsPerKm =
+
+    getRunPaceSecondsPerKm(run);
+
+  const usableLaps = (run.laps || []).filter(
+
+    (lap) =>
+
+      typeof lap.distance === "number" &&
+
+      lap.distance > 0 &&
+
+      (typeof lap.moving_time === "number" ||
+
+        typeof lap.elapsed_time === "number")
+
+  );
+
+  const lapPaces = usableLaps
+
+    .map((lap) => {
+
+      const distanceKm =
+
+        (lap.distance || 0) / 1000;
+
+      const timeSeconds =
+
+        lap.moving_time ||
+
+        lap.elapsed_time ||
+
+        0;
+
+      if (
+
+        distanceKm <= 0 ||
+
+        timeSeconds <= 0
+
+      ) {
+
+        return null;
+
+      }
+
+      return timeSeconds / distanceKm;
+
+    })
+
+    .filter(
+
+      (pace): pace is number =>
+
+        pace !== null &&
+
+        Number.isFinite(pace)
+
+    );
+
+  if (lapPaces.length >= 4) {
+
+    const fastestLap = Math.min(
+
+      ...lapPaces
+
+    );
+
+    const slowestLap = Math.max(
+
+      ...lapPaces
+
+    );
+
+    const paceVariation =
+
+      slowestLap - fastestLap;
+
+    if (paceVariation >= 45) {
+
+      return "interval";
+
+    }
+
+    if (
+
+      paceVariation >= 20 &&
+
+      distanceKm >= 8
+
+    ) {
+
+      return "steady";
+
+    }
+
   }
 
-  if (/\btempo\b/.test(text)) {
-    return "tempo";
-  }
+  if (distanceKm >= 18) {
 
-  if (
-    /\b(marathon pace|race pace|\bmp\b)\b/.test(text)
-  ) {
-    return "marathon-pace";
-  }
-
-  if (
-    /\b(long run|long-run|lsr)\b/.test(text) ||
-    getRunDistanceKm(run) >= 18
-  ) {
     return "long-run";
-  }
 
-  if (/\brecovery\b/.test(text)) {
-    return "recovery";
   }
 
   if (
-    /\b(progressive|progression|steady)\b/.test(text)
+
+    typeof run.workoutType === "number"
+
   ) {
+
+    /*
+
+      Strava workout-type values vary by
+
+      activity source, so this is deliberately
+
+      conservative. A populated workout type
+
+      supports a structured-session classification
+
+      without relying on the activity title.
+
+    */
+
+    if (
+
+      run.workoutType === 3 ||
+
+      run.workoutType === 11
+
+    ) {
+
+      return "interval";
+
+    }
+
+    if (
+
+      run.workoutType === 1 ||
+
+      run.workoutType === 2
+
+    ) {
+
+      return "race";
+
+    }
+
+  }
+
+  if (
+
+    paceSecondsPerKm !== null &&
+
+    paceSecondsPerKm <= 250 &&
+
+    distanceKm >= 8
+
+  ) {
+
     return "steady";
-  }
 
-  if (/\b(easy|aerobic)\b/.test(text)) {
-    return "easy";
   }
 
   if (
-    /\b(cross training|bike|cycle|swim)\b/.test(text)
+
+    paceSecondsPerKm !== null &&
+
+    paceSecondsPerKm >= 300
+
   ) {
-    return "cross-training";
+
+    return "recovery";
+
   }
 
-  return normaliseSessionType(run.runType);
+  return "easy";
+
 }
 
 function sessionTypesAreCompatible(
@@ -872,8 +1018,266 @@ function getRunsForSessionDate(
 ) {
   return runs.filter(
     (run) =>
-      getRunDateKey(run) === session.plannedDate
+      getRunDateKey(run) ===
+      session.plannedDate
   );
+}
+
+function getSessionTimingDetail(
+  session: MatchablePlannedSession,
+  matchedRuns: MatchableRun[]
+) {
+  const matchedRun =
+    matchedRuns[0] || null;
+
+  if (!matchedRun) {
+    return null;
+  }
+
+  const daysDifference =
+    getSignedDaysBetweenDates(
+      getRunDateKey(matchedRun),
+      session.plannedDate
+    );
+
+  if (
+    daysDifference === null ||
+    daysDifference === 0
+  ) {
+    return null;
+  }
+
+  const absoluteDays =
+    Math.abs(daysDifference);
+
+  const dayLabel =
+    absoluteDays === 1
+      ? "day"
+      : "days";
+
+  return daysDifference > 0
+    ? `Completed ${absoluteDays} ${dayLabel} later than planned.`
+    : `Completed ${absoluteDays} ${dayLabel} earlier than planned.`;
+}
+
+type CandidateRunMatch = {
+  run: MatchableRun;
+  executionScore: number;
+  dateDistance: number;
+  candidateScore: number;
+};
+
+function parseDateKey(value: string) {
+  const match = value
+    .slice(0, 10)
+    .match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const date = new Date(
+    year,
+    month - 1,
+    day
+  );
+
+  date.setHours(0, 0, 0, 0);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function getSignedDaysBetweenDates(
+  laterDate: string,
+  earlierDate: string
+) {
+  const later = parseDateKey(laterDate);
+  const earlier = parseDateKey(
+    earlierDate
+  );
+
+  if (!later || !earlier) {
+    return null;
+  }
+
+  return Math.round(
+    (later.getTime() -
+      earlier.getTime()) /
+      MS_PER_DAY
+  );
+}
+
+function getMatchingWindowDays(
+  session: MatchablePlannedSession
+) {
+  const sessionType =
+    normaliseSessionType(
+      session.sessionType
+    );
+
+  if (
+    sessionType === "long-run" ||
+    sessionType === "race"
+  ) {
+    return 2;
+  }
+
+  if (
+    sessionType === "interval" ||
+    sessionType === "threshold" ||
+    sessionType === "tempo" ||
+    sessionType === "marathon-pace"
+  ) {
+    return 3;
+  }
+
+  return 2;
+}
+
+function isRunEligibleForSession(
+  session: MatchablePlannedSession,
+  run: MatchableRun
+) {
+  const runDate = getRunDateKey(run);
+
+  const daysDifference =
+    getSignedDaysBetweenDates(
+      runDate,
+      session.plannedDate
+    );
+
+  if (daysDifference === null) {
+    return false;
+  }
+
+  return (
+    Math.abs(daysDifference) <=
+    getMatchingWindowDays(session)
+  );
+}
+
+function scoreCandidateRun(
+  session: MatchablePlannedSession,
+  run: MatchableRun
+): CandidateRunMatch {
+  const completedDistanceKm =
+    getRunDistanceKm(run);
+
+  const components: SessionMatchComponent[] =
+    [
+      scoreDistance(
+        session,
+        completedDistanceKm
+      ),
+      scoreSessionType(
+        session,
+        [run]
+      ),
+      scorePace(session, [run]),
+    ];
+
+  const executionScore =
+    calculateExecutionScore(
+      components
+    ) ?? 0;
+
+  const dateDifference =
+    getSignedDaysBetweenDates(
+      getRunDateKey(run),
+      session.plannedDate
+    );
+
+  const dateDistance =
+    dateDifference === null
+      ? 99
+      : Math.abs(dateDifference);
+
+  /*
+    Execution quality is the primary factor.
+    Date proximity is only a tie-breaker.
+
+    A perfect run one day late should beat a
+    weak run completed on the planned day.
+  */
+  const timingPenalty =
+    dateDistance * 4;
+
+  return {
+    run,
+    executionScore,
+    dateDistance,
+    candidateScore:
+      executionScore -
+      timingPenalty,
+  };
+}
+
+function selectBestRunForSession(
+  session: MatchablePlannedSession,
+  runs: MatchableRun[],
+  usedRunIds: Set<string>
+) {
+  const candidates = runs
+    .filter(
+      (run) =>
+        !usedRunIds.has(run.id) &&
+        isRunEligibleForSession(
+          session,
+          run
+        )
+    )
+    .map((run) =>
+      scoreCandidateRun(
+        session,
+        run
+      )
+    )
+    .filter(
+      (candidate) =>
+        candidate.executionScore >= 40
+    )
+    .sort((first, second) => {
+      if (
+        second.candidateScore !==
+        first.candidateScore
+      ) {
+        return (
+          second.candidateScore -
+          first.candidateScore
+        );
+      }
+
+      if (
+        first.dateDistance !==
+        second.dateDistance
+      ) {
+        return (
+          first.dateDistance -
+          second.dateDistance
+        );
+      }
+
+      return (
+        second.executionScore -
+        first.executionScore
+      );
+    });
+
+  return candidates[0] || null;
 }
 
 export function matchSessionToRuns(
@@ -944,9 +1348,22 @@ export function matchSessionToRuns(
       : executionScore;
 
   const verdict = buildVerdict(
-    status,
-    displayedScore
+  status,
+  displayedScore
+);
+
+const timingDetail =
+  getSessionTimingDetail(
+    session,
+    matchedRuns
   );
+
+const resultDetail =
+  timingDetail &&
+  (status === "completed" ||
+    status === "partial")
+    ? `${verdict.detail} ${timingDetail}`
+    : verdict.detail;
 
   return {
     sessionId: session.id,
@@ -955,7 +1372,7 @@ export function matchSessionToRuns(
     statusLabel: getStatusLabel(status),
     score: displayedScore,
     verdict: verdict.verdict,
-    detail: verdict.detail,
+    detail: resultDetail,
 
     plannedSession: session,
     matchedRuns,
@@ -974,6 +1391,140 @@ export function matchTrainingWeek(
   sessions: MatchablePlannedSession[],
   runs: MatchableRun[]
 ): SessionMatchResult[] {
+  const sortedSessions = sessions
+    .slice()
+    .sort((first, second) => {
+      /*
+        Allocate key sessions first so an easy
+        run cannot consume the best candidate for
+        a marathon-pace, interval or long session.
+      */
+      if (
+        first.isKeySession !==
+        second.isKeySession
+      ) {
+        return first.isKeySession
+          ? -1
+          : 1;
+      }
+
+      return first.plannedDate.localeCompare(
+        second.plannedDate
+      );
+    });
+
+  const usedRunIds =
+    new Set<string>();
+
+  const resultsBySessionId =
+    new Map<
+      string,
+      SessionMatchResult
+    >();
+
+  for (const session of sortedSessions) {
+        const today = getTodayDateKey();
+
+    if (session.plannedDate > today) {
+      const result =
+        matchSessionToRuns(
+          session,
+          []
+        );
+
+      resultsBySessionId.set(
+        session.id,
+        result
+      );
+
+      continue;
+    }
+    
+    if (session.isRestDay) {
+      const result =
+        matchSessionToRuns(
+          session,
+          runs
+        );
+
+      resultsBySessionId.set(
+        session.id,
+        result
+      );
+
+      continue;
+    }
+    const bestCandidate =
+      selectBestRunForSession(
+        session,
+        runs,
+        usedRunIds
+      );
+
+    const candidateRuns =
+      bestCandidate
+        ? [bestCandidate.run]
+        : [];
+
+    if (bestCandidate) {
+      usedRunIds.add(
+        bestCandidate.run.id
+      );
+    }
+
+    /*
+      Passing only the selected candidate means
+      matchSessionToRuns can continue performing
+      the detailed distance, pace and type scoring
+      without changing its public interface.
+    */
+    const candidateDateSession:
+      MatchablePlannedSession =
+      bestCandidate
+        ? {
+            ...session,
+            plannedDate:
+              getRunDateKey(
+                bestCandidate.run
+              ),
+          }
+        : session;
+
+    const rawResult =
+      matchSessionToRuns(
+        candidateDateSession,
+        candidateRuns
+      );
+
+    const timingDetail =
+      getSessionTimingDetail(
+        session,
+        candidateRuns
+      );
+
+    const result: SessionMatchResult =
+      {
+        ...rawResult,
+        sessionId: session.id,
+        plannedDate:
+          session.plannedDate,
+        plannedSession: session,
+        detail:
+          timingDetail &&
+          (rawResult.status ===
+            "completed" ||
+            rawResult.status ===
+              "partial")
+            ? `${rawResult.detail} ${timingDetail}`
+            : rawResult.detail,
+      };
+
+    resultsBySessionId.set(
+      session.id,
+      result
+    );
+  }
+
   return sessions
     .slice()
     .sort((first, second) =>
@@ -981,8 +1532,15 @@ export function matchTrainingWeek(
         second.plannedDate
       )
     )
-    .map((session) =>
-      matchSessionToRuns(session, runs)
+    .map(
+      (session) =>
+        resultsBySessionId.get(
+          session.id
+        ) ??
+        matchSessionToRuns(
+          session,
+          []
+        )
     );
 }
 
