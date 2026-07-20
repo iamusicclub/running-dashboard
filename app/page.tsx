@@ -162,11 +162,36 @@ function parseDate(value: string) {
   if (!value) return null;
 
   const cleanValue = value.slice(0, 10);
-  const date = new Date(`${cleanValue}T12:00:00`);
 
-  return Number.isNaN(date.getTime())
-    ? null
-    : date;
+  const [year, month, day] = cleanValue
+    .split("-")
+    .map(Number);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return null;
+  }
+
+  const date = new Date(
+    year,
+    month - 1,
+    day
+  );
+
+  date.setHours(0, 0, 0, 0);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
 }
 
 function dateKey(date: Date) {
