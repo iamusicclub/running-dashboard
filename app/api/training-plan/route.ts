@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const PARSER_VERSION = "distance-components-v2";
+
 const SPREADSHEET_ID =
   "1ze7UzVXiR3aBFODizWmT3KF5kTsIzlqEcIi06a9ZHlA";
 
@@ -356,35 +358,86 @@ function inferTitle(
 }
 
 function extractDistanceRange(value: string): DistanceRange {
-  const text = value.toLowerCase();
+  const text = normaliseText(value)
+    .toLowerCase()
+    .replace(/[ââ]/g, "-");
 
-  const rangeMatch = text.match(
-    /(\d+(?:\.\d+)?)\s*(?:\/|-|to)\s*(\d+(?:\.\d+)?)\s*km/
+  const formatRange = (
+    minimumKm: number,
+    maximumKm: number
+  ): DistanceRange => ({
+    minimumKm,
+    maximumKm,
+    display:
+      minimumKm === maximumKm
+        ? `${minimumKm} km`
+        : `${minimumKm}-${maximumKm} km`,
+  });
+
+  /*
+   * A coach may give the total session volume as well as its component
+   * parts, for example:
+   *
+   *   18km Vol
+   *   10km E
+   *   6km MP
+   *   2km Jog
+   *
+   * The explicit volume is authoritative. Without this check, adding all
+   * kilometre expressions would count the session twice.
+   */
+  const explicitVolumeMatch = text.match(
+    /(\d+(?:\.\d+)?)(?:\s*(?:\/|-|to)\s*(\d+(?:\.\d+)?))?\s*km\s*(?:vol(?:ume)?|total)\b/
   );
 
-  if (rangeMatch) {
-    const first = Number(rangeMatch[1]);
-    const second = Number(rangeMatch[2]);
+  if (explicitVolumeMatch) {
+    const first = Number(explicitVolumeMatch[1]);
+    const second = explicitVolumeMatch[2]
+      ? Number(explicitVolumeMatch[2])
+      : first;
 
-    return {
-      minimumKm: Math.min(first, second),
-      maximumKm: Math.max(first, second),
-      display: `${first}-${second} km`,
-    };
+    return formatRange(
+      Math.min(first, second),
+      Math.max(first, second)
+    );
   }
 
-  const singleMatch = text.match(
-    /(\d+(?:\.\d+)?)\s*km/
-  );
+  /*
+   * Otherwise, total all of the workout components. This converts:
+   *
+   *   2km E + 8-10km MP + 2km E
+   *
+   * into a planned total of 12-14km. A multiplier such as 2x3km is
+   * treated as 6km. Time repetitions such as 5x15sec do not match.
+   */
+  const distanceExpression =
+    /(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)(?:\s*(?:\/|-|to)\s*(\d+(?:\.\d+)?))?\s*km\b/g;
 
-  if (singleMatch) {
-    const distance = Number(singleMatch[1]);
+  let minimumKm = 0;
+  let maximumKm = 0;
+  let match: RegExpExecArray | null;
+  let foundDistance = false;
 
-    return {
-      minimumKm: distance,
-      maximumKm: distance,
-      display: `${distance} km`,
-    };
+  while (
+    (match = distanceExpression.exec(text)) !== null
+  ) {
+    const multiplier = match[1]
+      ? Number(match[1])
+      : 1;
+    const first = Number(match[2]);
+    const second = match[3]
+      ? Number(match[3])
+      : first;
+
+    minimumKm +=
+      Math.min(first, second) * multiplier;
+    maximumKm +=
+      Math.max(first, second) * multiplier;
+    foundDistance = true;
+  }
+
+  if (foundDistance) {
+    return formatRange(minimumKm, maximumKm);
   }
 
   return {
@@ -652,6 +705,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      parserVersion: PARSER_VERSION,
       spreadsheetId: SPREADSHEET_ID,
       sheetGid,
       sourceRowCount: parsedRows.length,
