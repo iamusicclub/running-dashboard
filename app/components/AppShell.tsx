@@ -283,7 +283,7 @@ function Sidebar({
         <div className="sidebar-footer">
           <span>16-week marathon block</span>
           <span className="sidebar-footer-separator">
-            •
+            |
           </span>
           <span>Version 2.0</span>
         </div>
