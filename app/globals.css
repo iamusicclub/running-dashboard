@@ -120,6 +120,239 @@ button {
   color: var(--colour-slate-950);
 }
 
+.training-review-page {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
+}
+
+.training-review-hero {
+  padding: 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  border-radius: var(--radius-xlarge);
+  color: #fff;
+  background: linear-gradient(135deg, var(--colour-blue-700), #172554);
+  box-shadow: var(--shadow-medium);
+}
+
+.training-review-hero h1 {
+  margin: 6px 0 8px;
+  font-size: clamp(32px, 5vw, 48px);
+  letter-spacing: -0.04em;
+}
+
+.training-review-hero p {
+  max-width: 720px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.training-sync-actions,
+.manual-review-buttons,
+.week-review-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.training-sync-actions button,
+.manual-review-buttons button {
+  padding: 10px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.training-sync-actions button {
+  color: var(--colour-blue-700);
+  background: #fff;
+}
+
+.training-week-toolbar,
+.training-session-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+}
+
+.training-week-toolbar {
+  padding: 20px;
+}
+
+.training-week-toolbar h2,
+.training-session-heading h2 {
+  margin: 3px 0 0;
+}
+
+.training-week-toolbar select {
+  min-width: 260px;
+  padding: 10px 12px;
+  border: 1px solid var(--colour-slate-300);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.training-session-list {
+  display: grid;
+  gap: 16px;
+}
+
+.training-session-card {
+  padding: 22px;
+}
+
+.training-session-plan {
+  max-width: 760px;
+  margin: 8px 0 0;
+  color: var(--colour-slate-600);
+}
+
+.review-status {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--colour-slate-700);
+  background: var(--colour-slate-100);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.review-status-completed {
+  color: #166534;
+  background: var(--colour-success-100);
+}
+
+.review-status-partial {
+  color: #92400e;
+  background: var(--colour-warning-100);
+}
+
+.review-status-missed {
+  color: #991b1b;
+  background: var(--colour-danger-100);
+}
+
+.training-session-comparison {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.training-session-comparison > div {
+  min-height: 94px;
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  border-radius: 12px;
+  background: var(--colour-slate-50);
+}
+
+.training-session-comparison span,
+.manual-review > span {
+  color: var(--colour-slate-500);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.training-session-comparison p,
+.training-session-comparison small {
+  margin: 0;
+  display: block;
+  color: var(--colour-slate-500);
+}
+
+.manual-review {
+  margin-top: 16px;
+  padding-top: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--colour-border);
+}
+
+.manual-review-buttons button {
+  color: var(--colour-slate-700);
+  background: var(--colour-slate-100);
+}
+
+.manual-review-buttons button[data-status="completed"].is-selected,
+.week-review-buttons button[data-status="completed"].is-selected {
+  color: #fff;
+  background: var(--colour-success-600);
+}
+
+.manual-review-buttons button[data-status="partial"].is-selected,
+.week-review-buttons button[data-status="partial"].is-selected {
+  color: #fff;
+  background: var(--colour-warning-600);
+}
+
+.manual-review-buttons button[data-status="missed"].is-selected,
+.week-review-buttons button[data-status="missed"].is-selected {
+  color: #fff;
+  background: var(--colour-danger-600);
+}
+
+.week-review-buttons {
+  margin-top: 10px;
+}
+
+.week-review-buttons button {
+  flex: 1 1 auto;
+  padding: 6px 5px;
+  border-radius: 7px;
+  color: var(--colour-slate-600);
+  background: var(--colour-slate-100);
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.review-message,
+.review-empty {
+  padding: 14px 18px;
+  border-radius: 10px;
+}
+
+.review-message-success {
+  color: #166534;
+  background: var(--colour-success-100);
+}
+
+.review-message-error {
+  color: #991b1b;
+  background: var(--colour-danger-100);
+}
+
+@media (max-width: 720px) {
+  .training-review-hero,
+  .training-week-toolbar,
+  .training-session-heading,
+  .manual-review {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .training-week-toolbar select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .training-session-comparison {
+    grid-template-columns: 1fr;
+  }
+}
+
 .application-shell {
   min-height: 100vh;
 }
