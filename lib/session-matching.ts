@@ -1438,13 +1438,6 @@ function buildSessionMatchResult(
       matchedRuns
     );
 
-const status =
-    getSessionStatus(
-      session,
-      matchedRuns,
-      executionScore
-    );
-
   const status =
   getSessionStatus(
     session,
