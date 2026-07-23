@@ -1166,24 +1166,9 @@ export default function HomePage() {
                       </strong>
                     </div>
 
-                    <div
-                      className={`execution-score ${getScoreToneClass(
-                        todayMatch.score
-                      )}`}
-                    >
-                      {todayMatch.score ===
-                      null
-                        ? "—"
-                        : todayMatch.score}
-
-                      <small>
-                        {todayMatch.score ===
-                        null
-                          ? ""
-                          : "%"}
-                      </small>
-                    </div>
-                  </div>
+                    <div className="execution-score">
+  {todayMatch.statusLabel}
+</div>
 
                   <p className="execution-verdict">
                     {todayMatch.verdict}
