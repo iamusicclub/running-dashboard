@@ -1423,19 +1423,9 @@ export default function HomePage() {
               {trainingPhase}
             </span>
 
-            {weekExecution.averageExecutionScore !==
-              null && (
-              <span
-                className={`week-score ${getScoreToneClass(
-                  weekExecution.averageExecutionScore
-                )}`}
-              >
-                {
-                  weekExecution.averageExecutionScore
-                }
-                % execution
-              </span>
-            )}
+        <span className="week-score">
+  {weekExecution.completionPercentage}% complete
+</span>
           </div>
         </div>
 
@@ -1514,23 +1504,13 @@ export default function HomePage() {
                     </small>
                   )}
 
-                  {matchResult?.score !==
-                    null &&
-                    matchResult?.score !==
-                      undefined && (
-                      <div className="day-execution-score">
-                        <span>
-                          Execution
-                        </span>
+           <div className="day-execution-score">
+  <span>Status</span>
 
-                        <strong>
-                          {
-                            matchResult.score
-                          }
-                          %
-                        </strong>
-                      </div>
-                    )}
+  <strong>
+    {matchResult?.statusLabel ?? "Awaiting review"}
+  </strong>
+</div>
 
                   {dayRuns.length > 0 && (
                     <div className="completed-run">
