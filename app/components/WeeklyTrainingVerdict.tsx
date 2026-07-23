@@ -1,5 +1,6 @@
 import type {
-  TrainingCategoryScore,
+  TrainingCategoryAssessment,
+  TrainingCategoryStatus,
   TrainingInsight,
   TrainingInsightTone,
   WeeklyTrainingAssessment,
@@ -27,24 +28,20 @@ function getToneClass(tone: TrainingInsightTone) {
   return "tone-neutral";
 }
 
-function getScoreClass(score: number | null) {
-  if (score === null) {
-    return "score-neutral";
+function getCategoryStatusClass(status: TrainingCategoryStatus) {
+  if (status === "completed") {
+    return "status-completed";
   }
 
-  if (score >= 85) {
-    return "score-positive";
+  if (status === "partial") {
+    return "status-partial";
   }
 
-  if (score >= 65) {
-    return "score-primary";
+  if (status === "missed") {
+    return "status-missed";
   }
 
-  if (score >= 45) {
-    return "score-warning";
-  }
-
-  return "score-critical";
+  return "status-neutral";
 }
 
 function formatDistance(value: number | null) {
@@ -55,33 +52,19 @@ function formatDistance(value: number | null) {
   return `${value.toFixed(1)} km`;
 }
 
-function CategoryScoreCard({
+function CategoryAssessmentCard({
   category,
 }: {
-  category: TrainingCategoryScore;
+  category: TrainingCategoryAssessment;
 }) {
   return (
     <article className="category-card">
       <div className="category-card-heading">
         <span>{category.label}</span>
 
-        <strong className={getScoreClass(category.score)}>
-          {category.score === null ? "—" : category.score}
-          {category.score === null ? "" : "%"}
+        <strong className={getCategoryStatusClass(category.status)}>
+          {category.statusLabel}
         </strong>
-      </div>
-
-      <div className="category-progress" aria-hidden="true">
-        <span
-          className={getScoreClass(category.score)}
-          style={{
-            width: `${
-              category.score === null
-                ? 0
-                : Math.max(0, Math.min(100, category.score))
-            }%`,
-          }}
-        />
       </div>
 
       <p>{category.context}</p>
@@ -136,17 +119,7 @@ export default function WeeklyTrainingVerdict({
           </div>
         </div>
 
-        <div className={`headline-score ${getScoreClass(assessment.score)}`}>
-          <div>
-            <strong>
-              {assessment.score === null ? "—" : assessment.score}
-            </strong>
-
-            <span>
-              {assessment.score === null ? "" : "/100"}
-            </span>
-          </div>
-
+        <div className={`headline-verdict ${getToneClass(assessment.tone)}`}>
           <small>{assessment.label}</small>
         </div>
       </header>
@@ -168,7 +141,7 @@ export default function WeeklyTrainingVerdict({
           <span>Completed</span>
           <strong>{assessment.completedSessionCount}</strong>
           <small>
-            {assessment.partialSessionCount} partial ·{" "}
+            {assessment.partialSessionCount} partial Â·{" "}
             {assessment.missedSessionCount} missed
           </small>
         </article>
@@ -213,8 +186,8 @@ export default function WeeklyTrainingVerdict({
         </div>
 
         <div className="category-grid">
-          {assessment.categoryScores.map((category) => (
-            <CategoryScoreCard
+          {assessment.categoryAssessments.map((category) => (
+            <CategoryAssessmentCard
               key={category.key}
               category={category}
             />
@@ -317,79 +290,39 @@ export default function WeeklyTrainingVerdict({
           background: var(--colour-slate-300);
         }
 
-        .headline-score {
+        .headline-verdict {
           min-width: 132px;
           padding: 15px 17px;
           border-radius: 14px;
           text-align: right;
         }
 
-        .headline-score > div {
-          display: flex;
-          align-items: baseline;
-          justify-content: flex-end;
-          gap: 3px;
-        }
-
-        .headline-score strong {
-          font-size: 38px;
-          font-weight: 820;
-          letter-spacing: -0.06em;
-          line-height: 0.9;
-        }
-
-        .headline-score span {
-          font-size: 11px;
-          font-weight: 750;
-        }
-
-        .headline-score small {
-          margin-top: 8px;
+        .headline-verdict small {
           display: block;
-          font-size: 10px;
+          font-size: 12px;
           font-weight: 760;
           letter-spacing: 0.06em;
           text-transform: uppercase;
         }
 
-        .score-positive {
+        .headline-verdict.tone-positive {
           color: #166534;
-        }
-
-        .headline-score.score-positive {
           background: #dcfce7;
         }
 
-        .score-primary {
+        .headline-verdict.tone-neutral {
           color: #1d4ed8;
-        }
-
-        .headline-score.score-primary {
           background: #dbeafe;
         }
 
-        .score-warning {
+        .headline-verdict.tone-warning {
           color: #92400e;
-        }
-
-        .headline-score.score-warning {
           background: #fef3c7;
         }
 
-        .score-critical {
+        .headline-verdict.tone-critical {
           color: #b91c1c;
-        }
-
-        .headline-score.score-critical {
           background: #fee2e2;
-        }
-
-        .score-neutral {
-          color: #475569;
-        }
-
-        .headline-score.score-neutral {
-          background: #f1f5f9;
         }
 
         .weekly-summary {
@@ -496,24 +429,27 @@ export default function WeeklyTrainingVerdict({
         }
 
         .category-card-heading strong {
-          font-size: 14px;
+          font-size: 10px;
           font-weight: 800;
+          letter-spacing: 0.04em;
+          text-align: right;
+          text-transform: uppercase;
         }
 
-        .category-progress {
-          height: 5px;
-          margin-top: 12px;
-          overflow: hidden;
-          border-radius: 999px;
-          background: var(--colour-slate-200);
+        .status-completed {
+          color: #166534;
         }
 
-        .category-progress span {
-          height: 100%;
-          display: block;
-          border-radius: inherit;
-          background: currentColor;
-          transition: width 300ms ease;
+        .status-partial {
+          color: #92400e;
+        }
+
+        .status-missed {
+          color: #b91c1c;
+        }
+
+        .status-neutral {
+          color: #475569;
         }
 
         .category-card p {
