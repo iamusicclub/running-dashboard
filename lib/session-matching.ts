@@ -78,7 +78,7 @@ export type SessionMatchResult = {
   plannedDate: string;
   status: SessionMatchStatus;
   statusLabel: string;
-  score: number | null;
+  manualStatus: "completed" | "partial" | "missed" | null;
   verdict: string;
   detail: string;
 
@@ -104,7 +104,16 @@ export type WeekExecution = {
   upcomingCount: number;
   unverifiedCount: number;
   completionPercentage: number;
-  averageExecutionScore: number | null;
+  export type WeekExecution = {
+  plannedCount: number;
+  dueCount: number;
+  completedCount: number;
+  partialCount: number;
+  missedCount: number;
+  restCount: number;
+  upcomingCount: number;
+  unverifiedCount: number;
+  completionPercentage: number; 
 };
 
 type PaceRange = {
@@ -1202,64 +1211,6 @@ function scoreSessionType(
   };
 }
 
-function calculateExecutionScore(
-  components:
-    SessionMatchComponent[]
-) {
-  const weights: Record<
-    SessionMatchComponentKey,
-    number
-  > = {
-    distance: 0.45,
-    "session-type": 0.35,
-    pace: 0.2,
-    structure: 0,
-    "heart-rate": 0,
-  };
-
-  const availableComponents =
-    components.filter(
-      (component) =>
-        component.available &&
-        weights[
-          component.key
-        ] > 0
-    );
-
-  if (
-    availableComponents.length ===
-    0
-  ) {
-    return null;
-  }
-
-  const totalWeight =
-    availableComponents.reduce(
-      (sum, component) =>
-        sum +
-        weights[
-          component.key
-        ],
-      0
-    );
-
-  const weightedScore =
-    availableComponents.reduce(
-      (sum, component) =>
-        sum +
-        component.score *
-          weights[
-            component.key
-          ],
-      0
-    );
-
-  return Math.round(
-    weightedScore /
-      totalWeight
-  );
-}
-
 function getStatusLabel(
   status: SessionMatchStatus
 ) {
@@ -1328,88 +1279,45 @@ function getSessionStatus(
 }
 
 function buildVerdict(
-  status: SessionMatchStatus,
-  score: number | null
+  status: SessionMatchStatus
 ) {
-  if (status === "upcoming") {
-    return {
-      verdict:
-        "Session not yet due",
-      detail:
-        "This session will be assessed after its planned date.",
-    };
-  }
+  switch (status) {
+    case "completed":
+      return {
+        verdict: "Completed",
+        detail: "The planned session was completed."
+      };
 
-  if (status === "rest") {
-    return {
-      verdict:
-        "Recovery instruction followed",
-      detail:
-        "No running activity was recorded on the planned rest day.",
-    };
-  }
+    case "partial":
+      return {
+        verdict: "Partially completed",
+        detail: "The session was only partially completed."
+      };
 
-  if (
-    status === "unverified"
-  ) {
-    return {
-      verdict:
-        "Session awaiting verification",
-      detail:
-        "The session is scheduled for today or cannot yet be assessed reliably.",
-    };
-  }
+    case "missed":
+      return {
+        verdict: "Missed",
+        detail: "No suitable activity was matched."
+      };
 
-  if (status === "missed") {
-    return {
-      verdict:
-        "Planned session not detected",
-      detail:
-        "No suitable running activity was found for this planned session.",
-    };
-  }
+    case "rest":
+      return {
+        verdict: "Rest day",
+        detail: "Recovery day observed."
+      };
 
-  if (
-    score !== null &&
-    score >= 90
-  ) {
-    return {
-      verdict: `Excellent execution (${score}%)`,
-      detail:
-        "The completed activity aligned closely with the coach's plan.",
-    };
-  }
+    case "upcoming":
+      return {
+        verdict: "Upcoming",
+        detail: "This session has not yet taken place."
+      };
 
-  if (
-    score !== null &&
-    score >= 80
-  ) {
-    return {
-      verdict: `Strong execution (${score}%)`,
-      detail:
-        "The main requirements of the planned session were achieved.",
-    };
+    default:
+      return {
+        verdict: "Awaiting review",
+        detail: "Completion has not yet been confirmed."
+      };
   }
-
-  if (
-    score !== null &&
-    score >= 70
-  ) {
-    return {
-      verdict: `Session completed (${score}%)`,
-      detail:
-        "The session was completed with some variation from the plan.",
-    };
-  }
-
-  return {
-    verdict:
-      score === null
-        ? "Activity requires review"
-        : `Partial execution (${score}%)`,
-    detail:
-      "A run was recorded, but it did not sufficiently match the planned distance, pace or workout type.",
-  };
 }
 
 function getRunsForSessionDate(
@@ -1540,23 +1448,19 @@ function buildSessionMatchResult(
       matchedRuns
     );
 
-  const executionScore =
-    session.isRestDay
-      ? matchedRuns.length === 0
-        ? 100
-        : 20
-      : matchedRuns.length === 0
-        ? 0
-        : calculateExecutionScore(
-            components
-          );
-
-  const status =
+const status =
     getSessionStatus(
       session,
       matchedRuns,
       executionScore
     );
+
+  const status =
+  getSessionStatus(
+    session,
+    matchedRuns,
+    matchedRuns.length > 0 ? 100 : null
+  );
 
   const displayedScore =
     status === "upcoming" ||
@@ -1565,10 +1469,7 @@ function buildSessionMatchResult(
       : executionScore;
 
   const verdict =
-    buildVerdict(
-      status,
-      displayedScore
-    );
+  buildVerdict(status);
 
   const timingDetail =
     getSessionTimingDetail(
@@ -1592,7 +1493,7 @@ function buildSessionMatchResult(
     status,
     statusLabel:
       getStatusLabel(status),
-    score: displayedScore,
+    manualStatus: null,
     verdict: verdict.verdict,
     detail,
 
@@ -2111,21 +2012,17 @@ export function calculateWeekExecution(
         "unverified"
     ).length;
 
-  const scoredMatches =
-    matches.filter(
-      (
-        match
-      ): match is SessionMatchResult & {
-        score: number;
-      } =>
-        typeof match.score ===
-          "number" &&
-        Number.isFinite(
-          match.score
-        ) &&
-        !match.plannedSession
-          .isRestDay
-    );
+  return {
+  plannedCount: matches.length,
+  dueCount: dueTrainingMatches.length,
+  completedCount,
+  partialCount,
+  missedCount,
+  restCount,
+  upcomingCount,
+  unverifiedCount,
+  completionPercentage,
+};
 
   const averageExecutionScore =
     scoredMatches.length === 0
