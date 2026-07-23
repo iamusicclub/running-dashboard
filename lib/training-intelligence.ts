@@ -1,4 +1,5 @@
 import type {
+  ManualSessionStatus,
   MatchablePlannedSession,
   MatchableRun,
   SessionMatchResult,
@@ -18,7 +19,14 @@ export type TrainingInsight = {
   priority: number;
 };
 
-export type TrainingCategoryScore = {
+export type TrainingCategoryStatus =
+  | "completed"
+  | "partial"
+  | "missed"
+  | "awaiting"
+  | "not-applicable";
+
+export type TrainingCategoryAssessment = {
   key:
     | "completion"
     | "distance"
@@ -26,19 +34,20 @@ export type TrainingCategoryScore = {
     | "easy"
     | "longRun"
     | "recovery";
-
   label: string;
-  score: number | null;
+  status: TrainingCategoryStatus;
+  statusLabel: string;
   context: string;
 };
 
 export type WeeklyTrainingAssessment = {
-  score: number | null;
   label: string;
   tone: TrainingInsightTone;
 
   plannedSessionCount: number;
   dueSessionCount: number;
+  reviewedSessionCount: number;
+  unreviewedSessionCount: number;
   completedSessionCount: number;
   partialSessionCount: number;
   missedSessionCount: number;
@@ -49,7 +58,7 @@ export type WeeklyTrainingAssessment = {
   distanceDifferenceKm: number | null;
   distanceCompletionPercentage: number | null;
 
-  categoryScores: TrainingCategoryScore[];
+  categoryAssessments: TrainingCategoryAssessment[];
 
   strengths: TrainingInsight[];
   concerns: TrainingInsight[];
@@ -69,21 +78,16 @@ type PlannedDistanceSummary = {
   hasDistanceTargets: boolean;
 };
 
-function clamp(
-  value: number,
-  minimum: number,
-  maximum: number
-) {
-  return Math.min(
-    maximum,
-    Math.max(minimum, value)
-  );
-}
+type ManualStatusCounts = {
+  completed: number;
+  partial: number;
+  missed: number;
+  awaiting: number;
+  reviewed: number;
+  total: number;
+};
 
-function round(
-  value: number,
-  decimals = 1
-) {
+function round(value: number, decimals = 1) {
   const multiplier = 10 ** decimals;
 
   return (
@@ -96,8 +100,11 @@ function getRunDistanceKm(
   run: MatchableRun
 ) {
   if (
-    typeof run.distanceMeters === "number" &&
-    Number.isFinite(run.distanceMeters) &&
+    typeof run.distanceMeters ===
+      "number" &&
+    Number.isFinite(
+      run.distanceMeters
+    ) &&
     run.distanceMeters > 0
   ) {
     return run.distanceMeters / 1000;
@@ -111,80 +118,6 @@ function getRunDistanceKm(
     parsed > 0
     ? parsed
     : 0;
-}
-
-function getRunTimeSeconds(
-  run: MatchableRun
-) {
-  if (
-    typeof run.movingTimeSeconds === "number" &&
-    Number.isFinite(
-      run.movingTimeSeconds
-    ) &&
-    run.movingTimeSeconds > 0
-  ) {
-    return run.movingTimeSeconds;
-  }
-
-  const value = run.time || "";
-
-  const parts = value
-    .split(":")
-    .map(Number);
-
-  if (
-    parts.some((part) =>
-      Number.isNaN(part)
-    )
-  ) {
-    return 0;
-  }
-
-  if (parts.length === 2) {
-    return (
-      parts[0] * 60 +
-      parts[1]
-    );
-  }
-
-  if (parts.length === 3) {
-    return (
-      parts[0] * 3600 +
-      parts[1] * 60 +
-      parts[2]
-    );
-  }
-
-  return 0;
-}
-
-function getRunPaceSecondsPerKm(
-  run: MatchableRun
-) {
-  if (
-    typeof run.paceSecondsPerKm === "number" &&
-    Number.isFinite(
-      run.paceSecondsPerKm
-    ) &&
-    run.paceSecondsPerKm > 0
-  ) {
-    return run.paceSecondsPerKm;
-  }
-
-  const distanceKm =
-    getRunDistanceKm(run);
-
-  const timeSeconds =
-    getRunTimeSeconds(run);
-
-  if (
-    distanceKm <= 0 ||
-    timeSeconds <= 0
-  ) {
-    return null;
-  }
-
-  return timeSeconds / distanceKm;
 }
 
 function normaliseType(value: string) {
@@ -212,26 +145,24 @@ function isLongRunSession(
     session.sessionType
   );
 
-  const text = `${session.title} ${session.rawText}`
-    .toLowerCase();
+  const text =
+    `${session.title} ${session.rawText}`.toLowerCase();
 
   return (
     type === "long-run" ||
     text.includes("long run") ||
     text.includes("long-run") ||
-    (session.distance.maximumKm !==
-      null &&
-      session.distance.maximumKm >= 18)
+    (
+      session.distance.maximumKm !==
+        null &&
+      session.distance.maximumKm >= 18
+    )
   );
 }
 
 function isQualitySession(
   session: MatchablePlannedSession
 ) {
-  const type = normaliseType(
-    session.sessionType
-  );
-
   return [
     "tempo",
     "threshold",
@@ -239,20 +170,24 @@ function isQualitySession(
     "intervals",
     "marathon-pace",
     "race",
-  ].includes(type);
+  ].includes(
+    normaliseType(
+      session.sessionType
+    )
+  );
 }
 
 function isEasySession(
   session: MatchablePlannedSession
 ) {
-  const type = normaliseType(
-    session.sessionType
-  );
-
   return [
     "easy",
     "steady",
-  ].includes(type);
+  ].includes(
+    normaliseType(
+      session.sessionType
+    )
+  );
 }
 
 function isRecoverySession(
@@ -263,6 +198,73 @@ function isRecoverySession(
       session.sessionType
     ) === "recovery"
   );
+}
+
+function toDateKey(date: Date) {
+  return [
+    date.getFullYear(),
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0"),
+    String(
+      date.getDate()
+    ).padStart(2, "0"),
+  ].join("-");
+}
+
+function getDueTrainingMatches(
+  matches: SessionMatchResult[],
+  today: Date
+) {
+  const todayKey = toDateKey(today);
+
+  return matches.filter(
+    (match) =>
+      !isRestSession(
+        match.plannedSession
+      ) &&
+      match.plannedDate <= todayKey
+  );
+}
+
+function getManualStatusCounts(
+  matches: SessionMatchResult[]
+): ManualStatusCounts {
+  const counts: ManualStatusCounts = {
+    completed: 0,
+    partial: 0,
+    missed: 0,
+    awaiting: 0,
+    reviewed: 0,
+    total: matches.length,
+  };
+
+  matches.forEach((match) => {
+    const status =
+      match.manualStatus;
+
+    if (status === "completed") {
+      counts.completed += 1;
+      counts.reviewed += 1;
+      return;
+    }
+
+    if (status === "partial") {
+      counts.partial += 1;
+      counts.reviewed += 1;
+      return;
+    }
+
+    if (status === "missed") {
+      counts.missed += 1;
+      counts.reviewed += 1;
+      return;
+    }
+
+    counts.awaiting += 1;
+  });
+
+  return counts;
 }
 
 function getPlannedDistanceSummary(
@@ -291,10 +293,8 @@ function getPlannedDistanceSummary(
     }
 
     hasDistanceTargets = true;
-
     minimumKm +=
       minimum ?? maximum ?? 0;
-
     maximumKm +=
       maximum ?? minimum ?? 0;
   });
@@ -306,189 +306,148 @@ function getPlannedDistanceSummary(
   };
 }
 
-function calculateAverageScore(
-  results: SessionMatchResult[]
-) {
-  const scored = results.filter(
-    (
-      result
-    ): result is SessionMatchResult & {
-      score: number;
-    } =>
-      result.score !== null &&
-      Number.isFinite(result.score)
-  );
-
-  if (scored.length === 0) {
-    return null;
+function getCategoryStatus(
+  counts: ManualStatusCounts
+): TrainingCategoryStatus {
+  if (counts.total === 0) {
+    return "not-applicable";
   }
 
-  return Math.round(
-    scored.reduce(
-      (sum, result) =>
-        sum + result.score,
-      0
-    ) / scored.length
-  );
-}
-
-function getDueMatches(
-  matches: SessionMatchResult[]
-) {
-  return matches.filter(
-    (match) =>
-      match.status !== "upcoming"
-  );
-}
-
-function calculateCompletionScore(
-  dueMatches: SessionMatchResult[]
-) {
-  if (dueMatches.length === 0) {
-    return null;
+  if (counts.reviewed === 0) {
+    return "awaiting";
   }
 
-  const points = dueMatches.reduce(
-    (total, match) => {
-      if (
-        match.status === "completed" ||
-        match.status === "rest"
-      ) {
-        return total + 1;
-      }
+  if (
+    counts.missed === 0 &&
+    counts.partial === 0 &&
+    counts.awaiting === 0
+  ) {
+    return "completed";
+  }
 
-      if (
-        match.status === "partial"
-      ) {
-        return total + 0.5;
-      }
+  if (
+    counts.completed === 0 &&
+    counts.partial === 0 &&
+    counts.awaiting === 0
+  ) {
+    return "missed";
+  }
 
-      return total;
-    },
-    0
-  );
-
-  return Math.round(
-    (points / dueMatches.length) *
-      100
-  );
+  return "partial";
 }
 
-function calculateCategoryScore(
-  sessions: MatchablePlannedSession[],
+function getCategoryStatusLabel(
+  status: TrainingCategoryStatus
+) {
+  const labels: Record<
+    TrainingCategoryStatus,
+    string
+  > = {
+    completed: "Completed",
+    partial: "Mixed",
+    missed: "Missed",
+    awaiting: "Awaiting review",
+    "not-applicable": "Not due",
+  };
+
+  return labels[status];
+}
+
+function formatStatusContext(
+  counts: ManualStatusCounts,
+  emptyText: string
+) {
+  if (counts.total === 0) {
+    return emptyText;
+  }
+
+  if (counts.reviewed === 0) {
+    return `${counts.total} due session${
+      counts.total === 1 ? "" : "s"
+    } awaiting a manual status.`;
+  }
+
+  const parts = [
+    counts.completed > 0
+      ? `${counts.completed} completed`
+      : null,
+    counts.partial > 0
+      ? `${counts.partial} partial`
+      : null,
+    counts.missed > 0
+      ? `${counts.missed} missed`
+      : null,
+    counts.awaiting > 0
+      ? `${counts.awaiting} awaiting review`
+      : null,
+  ].filter(
+    (part): part is string =>
+      part !== null
+  );
+
+  return `${parts.join(", ")}.`;
+}
+
+function buildCategoryAssessment(
+  key:
+    TrainingCategoryAssessment["key"],
+  label: string,
   matches: SessionMatchResult[],
-  predicate: (
-    session: MatchablePlannedSession
-  ) => boolean
-) {
-  const relevantSessionIds = new Set(
-    sessions
-      .filter(predicate)
-      .map((session) => session.id)
-  );
+  emptyText: string
+): TrainingCategoryAssessment {
+  const counts =
+    getManualStatusCounts(matches);
 
-  const relevantMatches =
-    matches.filter((match) =>
-      relevantSessionIds.has(
-        match.sessionId
-      )
-    );
+  const status =
+    getCategoryStatus(counts);
 
-  return calculateAverageScore(
-    relevantMatches
-  );
+  return {
+    key,
+    label,
+    status,
+    statusLabel:
+      getCategoryStatusLabel(status),
+    context: formatStatusContext(
+      counts,
+      emptyText
+    ),
+  };
 }
 
-function calculateRestScore(
-  sessions: MatchablePlannedSession[],
-  matches: SessionMatchResult[]
-) {
-  const restIds = new Set(
-    sessions
-      .filter(isRestSession)
-      .map((session) => session.id)
-  );
-
-  const restMatches = matches.filter(
-    (match) =>
-      restIds.has(match.sessionId) &&
-      match.status !== "upcoming"
-  );
-
-  if (restMatches.length === 0) {
-    return null;
+function getDistanceStatus(
+  plannedDistanceKm: number | null,
+  completedDistanceKm: number,
+  reviewedCount: number
+): TrainingCategoryStatus {
+  if (
+    plannedDistanceKm === null ||
+    plannedDistanceKm <= 0
+  ) {
+    return "not-applicable";
   }
 
-  const score = restMatches.reduce(
-    (sum, match) => {
-      if (
-        match.status === "rest"
-      ) {
-        return sum + 100;
-      }
-
-      if (
-        match.score !== null
-      ) {
-        return sum + match.score;
-      }
-
-      return sum;
-    },
-    0
-  );
-
-  return Math.round(
-    score / restMatches.length
-  );
-}
-
-function getScoreLabel(
-  score: number | null
-) {
-  if (score === null) {
-    return "Awaiting evidence";
+  if (reviewedCount === 0) {
+    return "awaiting";
   }
 
-  if (score >= 90) {
-    return "Excellent";
+  const percentage =
+    (
+      completedDistanceKm /
+      plannedDistanceKm
+    ) * 100;
+
+  if (
+    percentage >= 90 &&
+    percentage <= 115
+  ) {
+    return "completed";
   }
 
-  if (score >= 80) {
-    return "Strong";
+  if (percentage < 50) {
+    return "missed";
   }
 
-  if (score >= 70) {
-    return "Good";
-  }
-
-  if (score >= 55) {
-    return "Mixed";
-  }
-
-  return "Needs attention";
-}
-
-function getScoreTone(
-  score: number | null
-): TrainingInsightTone {
-  if (score === null) {
-    return "neutral";
-  }
-
-  if (score >= 80) {
-    return "positive";
-  }
-
-  if (score >= 60) {
-    return "neutral";
-  }
-
-  if (score >= 40) {
-    return "warning";
-  }
-
-  return "critical";
+  return "partial";
 }
 
 function createInsight(
@@ -507,68 +466,92 @@ function createInsight(
   };
 }
 
+function pluraliseSessions(
+  count: number
+) {
+  return `${count} session${
+    count === 1 ? "" : "s"
+  }`;
+}
+
 function buildStrengths(
-  categoryScores: TrainingCategoryScore[],
-  matches: SessionMatchResult[],
+  counts: ManualStatusCounts,
+  categoryAssessments:
+    TrainingCategoryAssessment[],
   completedDistanceKm: number,
   plannedDistanceKm: number | null
 ) {
-  const strengths: TrainingInsight[] = [];
+  const strengths: TrainingInsight[] =
+    [];
 
-  categoryScores.forEach(
-    (category) => {
-      if (
-        category.score !== null &&
-        category.score >= 85
-      ) {
-        strengths.push(
-          createInsight(
-            `strength-${category.key}`,
-            `${category.label} is strong`,
-            category.context,
-            "positive",
-            category.score
-          )
-        );
-      }
-    }
-  );
-
-  const excellentMatches =
-    matches.filter(
-      (match) =>
-        match.score !== null &&
-        match.score >= 90
-    );
-
-  if (excellentMatches.length > 0) {
+  if (
+    counts.reviewed > 0 &&
+    counts.completed ===
+      counts.reviewed &&
+    counts.awaiting === 0
+  ) {
     strengths.push(
       createInsight(
-        "excellent-sessions",
-        "High-quality execution",
-        `${excellentMatches.length} due session${
-          excellentMatches.length === 1
-            ? ""
-            : "s"
-        } scored at least 90%.`,
+        "all-due-sessions-completed",
+        "All due sessions completed",
+        `${pluraliseSessions(
+          counts.completed
+        )} have been manually marked as completed.`,
         "positive",
-        95
+        100
+      )
+    );
+  } else if (counts.completed > 0) {
+    strengths.push(
+      createInsight(
+        "completed-sessions",
+        "Training completed",
+        `${pluraliseSessions(
+          counts.completed
+        )} have been manually marked as completed.`,
+        "positive",
+        80 + counts.completed
       )
     );
   }
+
+  const completedCategories =
+    categoryAssessments.filter(
+      (category) =>
+        ![
+          "completion",
+          "distance",
+        ].includes(category.key) &&
+        category.status === "completed"
+    );
+
+  completedCategories.forEach(
+    (category) => {
+      strengths.push(
+        createInsight(
+          `strength-${category.key}`,
+          `${category.label} completed`,
+          category.context,
+          "positive",
+          85
+        )
+      );
+    }
+  );
 
   if (
     plannedDistanceKm !== null &&
     plannedDistanceKm > 0
   ) {
     const percentage =
-      (completedDistanceKm /
-        plannedDistanceKm) *
-      100;
+      (
+        completedDistanceKm /
+        plannedDistanceKm
+      ) * 100;
 
     if (
-      percentage >= 95 &&
-      percentage <= 110
+      percentage >= 90 &&
+      percentage <= 115
     ) {
       strengths.push(
         createInsight(
@@ -596,121 +579,114 @@ function buildStrengths(
 }
 
 function buildConcerns(
-  categoryScores: TrainingCategoryScore[],
-  matches: SessionMatchResult[],
+  counts: ManualStatusCounts,
+  categoryAssessments:
+    TrainingCategoryAssessment[],
   completedDistanceKm: number,
   plannedDistanceKm: number | null
 ) {
-  const concerns: TrainingInsight[] = [];
+  const concerns: TrainingInsight[] =
+    [];
 
-  categoryScores.forEach(
-    (category) => {
-      if (
-        category.score !== null &&
-        category.score < 65
-      ) {
-        concerns.push(
-          createInsight(
-            `concern-${category.key}`,
-            `${category.label} needs attention`,
-            category.context,
-            category.score < 45
-              ? "critical"
-              : "warning",
-            100 - category.score
-          )
-        );
-      }
-    }
-  );
-
-  const missedMatches =
-    matches.filter(
-      (match) =>
-        match.status === "missed"
-    );
-
-  if (missedMatches.length > 0) {
+  if (counts.missed > 0) {
     concerns.push(
       createInsight(
         "missed-sessions",
         "Sessions were missed",
-        `${missedMatches.length} due session${
-          missedMatches.length === 1
-            ? ""
-            : "s"
-        } did not have a matching Strava activity.`,
-        missedMatches.length >= 2
+        `${pluraliseSessions(
+          counts.missed
+        )} have been manually marked as missed.`,
+        counts.missed >= 2
           ? "critical"
           : "warning",
-        100
+        100 + counts.missed
       )
     );
   }
 
-  const partialMatches =
-    matches.filter(
-      (match) =>
-        match.status === "partial"
-    );
-
-  if (partialMatches.length > 0) {
+  if (counts.partial > 0) {
     concerns.push(
       createInsight(
         "partial-sessions",
-        "Some sessions only partially matched",
-        `${partialMatches.length} session${
-          partialMatches.length === 1
-            ? ""
-            : "s"
-        } materially differed from the coach plan.`,
+        "Sessions were only partly completed",
+        `${pluraliseSessions(
+          counts.partial
+        )} have been manually marked as partial.`,
         "warning",
-        75
+        85 + counts.partial
       )
     );
   }
+
+  const missedCategories =
+    categoryAssessments.filter(
+      (category) =>
+        ![
+          "completion",
+          "distance",
+        ].includes(category.key) &&
+        category.status === "missed"
+    );
+
+  missedCategories.forEach(
+    (category) => {
+      concerns.push(
+        createInsight(
+          `concern-${category.key}`,
+          `${category.label} was missed`,
+          category.context,
+          "warning",
+          90
+        )
+      );
+    }
+  );
 
   if (
     plannedDistanceKm !== null &&
     plannedDistanceKm > 0
   ) {
-    const difference =
-      completedDistanceKm -
-      plannedDistanceKm;
+    const percentageDifference =
+      (
+        (
+          completedDistanceKm -
+          plannedDistanceKm
+        ) /
+        plannedDistanceKm
+      ) * 100;
 
-    const percentage =
-      (difference /
-        plannedDistanceKm) *
-      100;
-
-    if (percentage < -15) {
+    if (percentageDifference < -15) {
       concerns.push(
         createInsight(
           "weekly-volume-shortfall",
           "Weekly volume is below plan",
           `${round(
-            Math.abs(percentage),
+            Math.abs(
+              percentageDifference
+            ),
             0
           )}% less distance has been completed than planned.`,
-          percentage < -30
+          percentageDifference < -30
             ? "critical"
             : "warning",
-          Math.abs(percentage)
+          Math.abs(
+            percentageDifference
+          )
         )
       );
     }
 
-    if (percentage > 20) {
+    if (percentageDifference > 20) {
       concerns.push(
         createInsight(
           "weekly-volume-excess",
           "Weekly volume is above plan",
           `${round(
-            percentage,
+            percentageDifference,
             0
           )}% more distance has been completed than planned.`,
           "warning",
-          percentage
+          percentageDifference
         )
       );
     }
@@ -725,45 +701,90 @@ function buildConcerns(
     .slice(0, 4);
 }
 
+function getOverallVerdict(
+  counts: ManualStatusCounts
+): {
+  label: string;
+  tone: TrainingInsightTone;
+} {
+  if (
+    counts.total === 0 ||
+    counts.reviewed === 0
+  ) {
+    return {
+      label: "Awaiting review",
+      tone: "neutral",
+    };
+  }
+
+  if (
+    counts.missed === 0 &&
+    counts.partial === 0
+  ) {
+    return {
+      label:
+        counts.awaiting > 0
+          ? "On track so far"
+          : "On track",
+      tone: "positive",
+    };
+  }
+
+  if (
+    counts.missed === 0 &&
+    counts.partial > 0
+  ) {
+    return {
+      label: "Mostly on track",
+      tone: "neutral",
+    };
+  }
+
+  if (
+    counts.missed >= 2 ||
+    counts.missed >
+      counts.completed
+  ) {
+    return {
+      label: "Needs attention",
+      tone: "critical",
+    };
+  }
+
+  return {
+    label: "Mixed week",
+    tone: "warning",
+  };
+}
+
 function buildSummary(
-  score: number | null,
-  completedCount: number,
-  partialCount: number,
-  missedCount: number,
+  counts: ManualStatusCounts,
+  label: string,
   strengths: TrainingInsight[],
   concerns: TrainingInsight[]
 ) {
-  if (score === null) {
-    return "There is not yet enough completed training evidence to assess this week.";
+  if (counts.total === 0) {
+    return "No training sessions are due yet, so there is nothing to assess.";
   }
 
-  const scoreDescription =
-    score >= 90
-      ? "an excellent"
-      : score >= 80
-      ? "a strong"
-      : score >= 70
-      ? "a good"
-      : score >= 55
-      ? "a mixed"
-      : "a weak";
+  if (counts.reviewed === 0) {
+    return `${pluraliseSessions(
+      counts.total
+    )} are due, but none has been manually reviewed yet.`;
+  }
 
   let summary =
-    `This is ${scoreDescription} training week so far, with an execution score of ${score}%. `;
+    `${label}: ${counts.completed} completed, ${counts.partial} partial and ${counts.missed} missed.`;
 
-  summary += `${completedCount} session${
-    completedCount === 1 ? "" : "s"
-  } completed`;
-
-  if (partialCount > 0) {
-    summary += `, ${partialCount} partially matched`;
+  if (counts.awaiting > 0) {
+    summary += ` ${pluraliseSessions(
+      counts.awaiting
+    )} still ${
+      counts.awaiting === 1
+        ? "requires"
+        : "require"
+    } a manual status.`;
   }
-
-  if (missedCount > 0) {
-    summary += ` and ${missedCount} missed`;
-  }
-
-  summary += ".";
 
   if (strengths.length > 0) {
     summary += ` The clearest positive is ${strengths[0].title.toLowerCase()}.`;
@@ -776,37 +797,33 @@ function buildSummary(
   return summary;
 }
 
+function getMatchesForCategory(
+  dueMatches: SessionMatchResult[],
+  predicate: (
+    session: MatchablePlannedSession
+  ) => boolean
+) {
+  return dueMatches.filter((match) =>
+    predicate(match.plannedSession)
+  );
+}
+
 export function buildWeeklyTrainingAssessment({
   runs,
   plannedSessions,
   matches,
+  today = new Date(),
 }: RunAnalysisInput): WeeklyTrainingAssessment {
   const dueMatches =
-    getDueMatches(matches);
+    getDueTrainingMatches(
+      matches,
+      today
+    );
 
-  const completedSessionCount =
-    dueMatches.filter(
-      (match) =>
-        match.status === "completed" ||
-        match.status === "rest"
-    ).length;
-
-  const partialSessionCount =
-    dueMatches.filter(
-      (match) =>
-        match.status === "partial"
-    ).length;
-
-  const missedSessionCount =
-    dueMatches.filter(
-      (match) =>
-        match.status === "missed"
-    ).length;
-
-  const restDayCount =
-    plannedSessions.filter(
-      isRestSession
-    ).length;
+  const counts =
+    getManualStatusCounts(
+      dueMatches
+    );
 
   const completedDistanceKm =
     runs.reduce(
@@ -838,227 +855,145 @@ export function buildWeeklyTrainingAssessment({
     plannedDistanceKm !== null &&
     plannedDistanceKm > 0
       ? Math.round(
-          (completedDistanceKm /
-            plannedDistanceKm) *
-            100
+          (
+            completedDistanceKm /
+            plannedDistanceKm
+          ) * 100
         )
       : null;
 
-  const completionScore =
-    calculateCompletionScore(
-      dueMatches
+  const completionAssessment =
+    buildCategoryAssessment(
+      "completion",
+      "Session completion",
+      dueMatches,
+      "No training sessions are due yet."
     );
 
-  const distanceScore =
-    plannedDistanceKm !== null &&
-    plannedDistanceKm > 0
-      ? clamp(
-          100 -
-            Math.abs(
-              (completedDistanceKm -
-                plannedDistanceKm) /
-                plannedDistanceKm
-            ) *
-              160,
-          0,
-          100
-        )
-      : null;
-
-  const qualityScore =
-    calculateCategoryScore(
-      plannedSessions,
-      matches,
-      isQualitySession
+  const distanceStatus =
+    getDistanceStatus(
+      plannedDistanceKm,
+      completedDistanceKm,
+      counts.reviewed
     );
 
-  const easyScore =
-    calculateCategoryScore(
-      plannedSessions,
-      matches,
-      isEasySession
-    );
+  const distanceAssessment:
+    TrainingCategoryAssessment = {
+      key: "distance",
+      label: "Weekly distance",
+      status: distanceStatus,
+      statusLabel:
+        getCategoryStatusLabel(
+          distanceStatus
+        ),
+      context:
+        plannedDistanceKm === null
+          ? "The coach plan does not contain enough numerical distance targets."
+          : `${round(
+              completedDistanceKm
+            )} km completed against approximately ${round(
+              plannedDistanceKm
+            )} km planned.`,
+    };
 
-  const longRunScore =
-    calculateCategoryScore(
-      plannedSessions,
-      matches,
-      isLongRunSession
-    );
-
-  const recoveryScore =
-    calculateCategoryScore(
-      plannedSessions,
-      matches,
-      isRecoverySession
-    );
-
-  const categoryScores: TrainingCategoryScore[] =
-    [
-      {
-        key: "completion",
-        label: "Session completion",
-        score: completionScore,
-        context:
-          completionScore === null
-            ? "No sessions are due yet."
-            : `${completedSessionCount} completed, ${partialSessionCount} partial and ${missedSessionCount} missed.`,
-      },
-      {
-        key: "distance",
-        label: "Distance accuracy",
-        score:
-          distanceScore === null
-            ? null
-            : Math.round(
-                distanceScore
-              ),
-        context:
-          plannedDistanceKm === null
-            ? "The coach plan does not contain enough numerical distance targets."
-            : `${round(
-                completedDistanceKm
-              )} km completed against approximately ${round(
-                plannedDistanceKm
-              )} km planned.`,
-      },
-      {
-        key: "quality",
-        label: "Quality sessions",
-        score: qualityScore,
-        context:
-          qualityScore === null
-            ? "No quality session has been assessed yet."
-            : `${getScoreLabel(
-                qualityScore
-              )} execution across due quality work.`,
-      },
-      {
-        key: "easy",
-        label: "Easy running",
-        score: easyScore,
-        context:
-          easyScore === null
-            ? "No easy session has been assessed yet."
-            : `${getScoreLabel(
-                easyScore
-              )} adherence to easy and steady sessions.`,
-      },
-      {
-        key: "longRun",
-        label: "Long run",
-        score: longRunScore,
-        context:
-          longRunScore === null
-            ? "The weekly long run has not yet been assessed."
-            : `${getScoreLabel(
-                longRunScore
-              )} long-run execution.`,
-      },
-      {
-        key: "recovery",
-        label: "Recovery compliance",
-        score: recoveryScore,
-        context:
-          recoveryScore === null
-            ? "No recovery session has been assessed yet."
-            : `${getScoreLabel(
-                recoveryScore
-              )} recovery-session adherence.`,
-      },
+  const categoryAssessments:
+    TrainingCategoryAssessment[] = [
+      completionAssessment,
+      distanceAssessment,
+      buildCategoryAssessment(
+        "quality",
+        "Quality sessions",
+        getMatchesForCategory(
+          dueMatches,
+          isQualitySession
+        ),
+        "No quality session is due yet."
+      ),
+      buildCategoryAssessment(
+        "easy",
+        "Easy running",
+        getMatchesForCategory(
+          dueMatches,
+          isEasySession
+        ),
+        "No easy or steady session is due yet."
+      ),
+      buildCategoryAssessment(
+        "longRun",
+        "Long run",
+        getMatchesForCategory(
+          dueMatches,
+          isLongRunSession
+        ),
+        "The weekly long run is not due yet."
+      ),
+      buildCategoryAssessment(
+        "recovery",
+        "Recovery running",
+        getMatchesForCategory(
+          dueMatches,
+          isRecoverySession
+        ),
+        "No recovery session is due yet."
+      ),
     ];
 
-  const weightedCategories = [
-    {
-      score: completionScore,
-      weight: 0.3,
-    },
-    {
-      score:
-        distanceScore === null
-          ? null
-          : Math.round(distanceScore),
-      weight: 0.2,
-    },
-    {
-      score: qualityScore,
-      weight: 0.2,
-    },
-    {
-      score: longRunScore,
-      weight: 0.15,
-    },
-    {
-      score: easyScore,
-      weight: 0.08,
-    },
-    {
-      score: recoveryScore,
-      weight: 0.07,
-    },
-  ].filter(
-    (
-      category
-    ): category is {
-      score: number;
-      weight: number;
-    } => category.score !== null
-  );
-
-  const availableWeight =
-    weightedCategories.reduce(
-      (sum, category) =>
-        sum + category.weight,
-      0
-    );
-
-  const score =
-    availableWeight > 0
-      ? Math.round(
-          weightedCategories.reduce(
-            (sum, category) =>
-              sum +
-              category.score *
-                category.weight,
-            0
-          ) / availableWeight
-        )
-      : null;
-
   const strengths = buildStrengths(
-    categoryScores,
-    dueMatches,
+    counts,
+    categoryAssessments,
     completedDistanceKm,
     plannedDistanceKm
   );
 
   const concerns = buildConcerns(
-    categoryScores,
-    dueMatches,
+    counts,
+    categoryAssessments,
     completedDistanceKm,
     plannedDistanceKm
   );
 
+  const verdict =
+    getOverallVerdict(counts);
+
   return {
-    score,
-    label: getScoreLabel(score),
-    tone: getScoreTone(score),
+    label: verdict.label,
+    tone: verdict.tone,
 
     plannedSessionCount:
-      plannedSessions.length,
+      plannedSessions.filter(
+        (session) =>
+          !isRestSession(session)
+      ).length,
 
     dueSessionCount:
       dueMatches.length,
 
-    completedSessionCount,
-    partialSessionCount,
-    missedSessionCount,
-    restDayCount,
+    reviewedSessionCount:
+      counts.reviewed,
+
+    unreviewedSessionCount:
+      counts.awaiting,
+
+    completedSessionCount:
+      counts.completed,
+
+    partialSessionCount:
+      counts.partial,
+
+    missedSessionCount:
+      counts.missed,
+
+    restDayCount:
+      plannedSessions.filter(
+        isRestSession
+      ).length,
 
     plannedDistanceKm:
       plannedDistanceKm === null
         ? null
-        : round(plannedDistanceKm),
+        : round(
+            plannedDistanceKm
+          ),
 
     completedDistanceKm:
       round(completedDistanceKm),
@@ -1066,22 +1001,35 @@ export function buildWeeklyTrainingAssessment({
     distanceDifferenceKm:
       distanceDifferenceKm === null
         ? null
-        : round(distanceDifferenceKm),
+        : round(
+            distanceDifferenceKm
+          ),
 
     distanceCompletionPercentage,
 
-    categoryScores,
+    categoryAssessments,
 
     strengths,
     concerns,
 
     summary: buildSummary(
-      score,
-      completedSessionCount,
-      partialSessionCount,
-      missedSessionCount,
+      counts,
+      verdict.label,
       strengths,
       concerns
     ),
   };
+}
+
+export function isManualSessionStatus(
+  value: unknown
+): value is Exclude<
+  ManualSessionStatus,
+  null
+> {
+  return (
+    value === "completed" ||
+    value === "partial" ||
+    value === "missed"
+  );
 }
