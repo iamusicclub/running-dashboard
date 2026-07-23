@@ -83,7 +83,7 @@ type TrainingPlanResponse = {
   error?: string;
 };
 
-const MALAGA_RACE_NAME = "MÃ¡laga Marathon";
+const MALAGA_RACE_NAME = "Malaga Marathon";
 const MALAGA_RACE_DATE = "2026-11-08";
 const MARATHON_DISTANCE_KM = 42.195;
 const TARGET_TIME = "2:59:59";
@@ -365,7 +365,7 @@ function formatWeekLabel(
 
   return `${formatDisplayDate(
     week.weekStartingDate
-  )} â ${formatDisplayDate(
+  )} - ${formatDisplayDate(
     week.weekEndingDate
   )}`;
 }
@@ -1024,7 +1024,7 @@ export default function HomePage() {
             <p className="hero-kicker">
               Project Sub-3
               <span>/</span>
-              MÃ¡laga 2026
+              Malaga 2026
             </p>
 
             <h1>{MALAGA_RACE_NAME}</h1>
@@ -1032,7 +1032,7 @@ export default function HomePage() {
             <p className="hero-description">
               Execute the coach&apos;s plan,
               develop marathon-specific
-              endurance and arrive in MÃ¡laga
+              endurance and arrive in Malaga
               ready to run under three hours.
             </p>
           </div>
@@ -1043,7 +1043,7 @@ export default function HomePage() {
             <div className="countdown-value">
               <strong>
                 {daysToRace === null
-                  ? "â"
+                  ? "-"
                   : Math.max(
                       0,
                       daysToRace
@@ -1455,7 +1455,7 @@ export default function HomePage() {
           value={
             `${weekExecution.completionPercentage}%`
           }
-          context={`${weekExecution.completedCount} completed â¢ ${weekExecution.partialCount} partial â¢ ${weekExecution.missedCount} missed`}
+          context={`${weekExecution.completedCount} completed | ${weekExecution.partialCount} partial | ${weekExecution.missedCount} missed`}
         />
 
         <MetricCard
