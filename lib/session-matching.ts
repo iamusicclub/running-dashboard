@@ -58,6 +58,12 @@ export type SessionMatchStatus =
   | "upcoming"
   | "unverified";
 
+export type ManualSessionStatus =
+  | "completed"
+  | "partial"
+  | "missed"
+  | null;
+
 export type SessionMatchComponentKey =
   | "distance"
   | "pace"
@@ -78,7 +84,7 @@ export type SessionMatchResult = {
   plannedDate: string;
   status: SessionMatchStatus;
   statusLabel: string;
-  manualStatus: "completed" | "partial" | "missed" | null;
+  manualStatus: ManualSessionStatus;
   verdict: string;
   detail: string;
 
@@ -114,7 +120,7 @@ type PaceRange = {
 type CandidateRunMatch = {
   session: MatchablePlannedSession;
   run: MatchableRun;
-  executionScore: number;
+  compatibilityScore: number;
   sessionTypeScore: number;
   dateDifference: number;
   dateDistance: number;
@@ -607,10 +613,6 @@ function classifyRun(
       run
     );
 
-  /*
-    A stored recovery classification
-    is accepted directly.
-  */
   if (
     recordedType ===
     "recovery"
@@ -618,11 +620,6 @@ function classifyRun(
     return "recovery";
   }
 
-  /*
-    An easy-labelled run at 5:00/km
-    or slower is treated as recovery
-    evidence for this athlete.
-  */
   if (
     recordedType === "easy"
   ) {
@@ -968,12 +965,6 @@ function scorePace(
       session.targetPaceText
     );
 
-  /*
-    Recovery sessions can be assessed
-    using the athlete-specific recovery
-    threshold even where the plan does
-    not contain a numerical pace.
-  */
   if (!paceRange) {
     if (
       plannedType ===
@@ -1201,6 +1192,34 @@ function scoreSessionType(
   };
 }
 
+function calculateCompatibilityScore(
+  components: SessionMatchComponent[]
+) {
+  const availableComponents =
+    components.filter(
+      (component) =>
+        component.available
+    );
+
+  if (
+    availableComponents.length === 0
+  ) {
+    return 0;
+  }
+
+  const total =
+    availableComponents.reduce(
+      (sum, component) =>
+        sum + component.score,
+      0
+    );
+
+  return Math.round(
+    total /
+      availableComponents.length
+  );
+}
+
 function getStatusLabel(
   status: SessionMatchStatus
 ) {
@@ -1223,8 +1242,7 @@ function getStatusLabel(
 
 function getSessionStatus(
   session: MatchablePlannedSession,
-  matchedRuns: MatchableRun[],
-  score: number | null
+  matchedRuns: MatchableRun[]
 ): SessionMatchStatus {
   const today =
     getTodayDateKey();
@@ -1257,15 +1275,7 @@ function getSessionStatus(
     return "missed";
   }
 
-  if (score === null) {
-    return "unverified";
-  }
-
-  if (score >= 70) {
-    return "completed";
-  }
-
-  return "partial";
+  return "completed";
 }
 
 function buildVerdict(
@@ -1274,38 +1284,47 @@ function buildVerdict(
   switch (status) {
     case "completed":
       return {
-        verdict: "Completed",
-        detail: "The planned session was completed."
+        verdict: "Activity matched",
+        detail:
+          "A completed activity has been matched to the planned session.",
       };
 
     case "partial":
       return {
-        verdict: "Partially completed",
-        detail: "The session was only partially completed."
+        verdict:
+          "Review required",
+        detail:
+          "Activity was recorded, but the planned rest or session structure requires review.",
       };
 
     case "missed":
       return {
-        verdict: "Missed",
-        detail: "No suitable activity was matched."
+        verdict: "No activity matched",
+        detail:
+          "No suitable activity was matched to this planned session.",
       };
 
     case "rest":
       return {
-        verdict: "Rest day",
-        detail: "Recovery day observed."
+        verdict: "Rest day observed",
+        detail:
+          "No running activity was recorded on the planned rest day.",
       };
 
     case "upcoming":
       return {
         verdict: "Upcoming",
-        detail: "This session has not yet taken place."
+        detail:
+          "This session has not yet taken place.",
       };
 
+    case "unverified":
     default:
       return {
-        verdict: "Awaiting review",
-        detail: "Completion has not yet been confirmed."
+        verdict:
+          "Awaiting verification",
+        detail:
+          "Completion has not yet been confirmed.",
       };
   }
 }
@@ -1439,20 +1458,13 @@ function buildSessionMatchResult(
     );
 
   const status =
-  getSessionStatus(
-    session,
-    matchedRuns,
-    matchedRuns.length > 0 ? 100 : null
-  );
-
-  const displayedScore =
-    status === "upcoming" ||
-    status === "unverified"
-      ? null
-      : executionScore;
+    getSessionStatus(
+      session,
+      matchedRuns
+    );
 
   const verdict =
-  buildVerdict(status);
+    buildVerdict(status);
 
   const timingDetail =
     getSessionTimingDetail(
@@ -1578,10 +1590,10 @@ function scoreCandidateRun(
       [run]
     );
 
-  const executionScore =
-    calculateExecutionScore(
+  const compatibilityScore =
+    calculateCompatibilityScore(
       components
-    ) ?? 0;
+    );
 
   const sessionTypeComponent =
     components.find(
@@ -1602,14 +1614,6 @@ function scoreCandidateRun(
   const isExactDate =
     dateDistance === 0;
 
-  /*
-    Rescheduled activities must provide
-    a compatible training stimulus.
-
-    Exact-date runs can still be shown
-    as partial where the athlete completed
-    something different from the plan.
-  */
   if (
     !isExactDate &&
     sessionTypeScore < 70
@@ -1618,7 +1622,7 @@ function scoreCandidateRun(
   }
 
   if (
-    executionScore < 40
+    compatibilityScore < 40
   ) {
     return null;
   }
@@ -1630,14 +1634,14 @@ function scoreCandidateRun(
     dateDistance * 6;
 
   const assignmentScore =
-    executionScore +
+    compatibilityScore +
     exactDateBonus -
     timingPenalty;
 
   return {
     session,
     run,
-    executionScore,
+    compatibilityScore,
     sessionTypeScore,
     dateDifference,
     dateDistance,
@@ -1714,8 +1718,8 @@ function buildCandidateMap(
             }
 
             return (
-              second.executionScore -
-              first.executionScore
+              second.compatibilityScore -
+              first.compatibilityScore
             );
           }
         );
@@ -1779,9 +1783,6 @@ function solveGlobalAssignment(
         session.id
       ) ?? [];
 
-    /*
-      The session may remain unmatched.
-    */
     search(
       sessionIndex + 1,
       usedRunIds,
@@ -1895,10 +1896,6 @@ export function matchTrainingWeek(
 
   return orderedSessions.map(
     (session) => {
-      /*
-        Future sessions remain upcoming
-        and are not allowed to claim runs.
-      */
       if (
         session.plannedDate >
         today
@@ -1909,9 +1906,6 @@ export function matchTrainingWeek(
         );
       }
 
-      /*
-        Rest days remain date-specific.
-      */
       if (session.isRestDay) {
         const restDayRuns =
           getRunsForSessionDate(
@@ -1995,31 +1989,6 @@ export function calculateWeekExecution(
         "unverified"
     ).length;
 
-  return {
-  plannedCount: matches.length,
-  dueCount: dueTrainingMatches.length,
-  completedCount,
-  partialCount,
-  missedCount,
-  restCount,
-  upcomingCount,
-  unverifiedCount,
-  completionPercentage,
-};
-
-  const averageExecutionScore =
-    scoredMatches.length === 0
-      ? null
-      : Math.round(
-          scoredMatches.reduce(
-            (sum, match) =>
-              sum +
-              match.score,
-            0
-          ) /
-            scoredMatches.length
-        );
-
   const completionPercentage =
     dueTrainingMatches.length ===
     0
@@ -2043,7 +2012,6 @@ export function calculateWeekExecution(
     upcomingCount,
     unverifiedCount,
     completionPercentage,
-    averageExecutionScore,
   };
 }
 
