@@ -176,7 +176,7 @@ function normaliseText(
 ) {
   return (value ?? "")
     .toLowerCase()
-    .replace(/[–—]/g, "-")
+    .replace(/[ââ]/g, "-")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -429,6 +429,266 @@ function getWeightedAveragePace(
   );
 }
 
+type DistanceComponent = {
+  minimumKm: number;
+  maximumKm: number;
+  startIndex: number;
+  endIndex: number;
+  description: string;
+};
+
+function extractDistanceComponents(
+  rawText: string
+): DistanceComponent[] {
+  const text = rawText
+    .toLowerCase()
+    .replace(/[ââ]/g, "-");
+
+  const expression =
+    /(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)(?:\s*(?:\/|-|to)\s*(\d+(?:\.\d+)?))?\s*km\b/g;
+
+  const matches =
+    Array.from(
+      text.matchAll(expression)
+    );
+
+  return matches.map(
+    (match, index) => {
+      const multiplier =
+        match[1]
+          ? Number(match[1])
+          : 1;
+
+      const first =
+        Number(match[2]);
+
+      const second =
+        match[3]
+          ? Number(match[3])
+          : first;
+
+      const startIndex =
+        match.index ?? 0;
+
+      const endIndex =
+        index + 1 <
+        matches.length
+          ? matches[index + 1]
+              .index ??
+            text.length
+          : text.length;
+
+      return {
+        minimumKm:
+          Math.min(
+            first,
+            second
+          ) * multiplier,
+        maximumKm:
+          Math.max(
+            first,
+            second
+          ) * multiplier,
+        startIndex,
+        endIndex,
+        description:
+          text.slice(
+            startIndex,
+            endIndex
+          ),
+      };
+    }
+  );
+}
+
+function getTargetBlockBoundaries(
+  session: MatchablePlannedSession
+) {
+  const components =
+    extractDistanceComponents(
+      session.rawText
+    );
+
+  if (components.length < 2) {
+    return null;
+  }
+
+  const targetIndex =
+    components.findIndex(
+      (component) =>
+        /\b(?:mp|m\s*pace|marathon\s*pace|tempo|threshold|10k\s*(?:pace|effort)|5k\s*(?:pace|effort)|hm\s*(?:pace|effort))\b/.test(
+          component.description
+        ) ||
+        /\d{1,2}:\d{2}/.test(
+          component.description
+        )
+    );
+
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  const distanceBeforeKm =
+    components
+      .slice(0, targetIndex)
+      .reduce(
+        (sum, component) =>
+          sum +
+          component.maximumKm,
+        0
+      );
+
+  const distanceAfterKm =
+    components
+      .slice(targetIndex + 1)
+      .reduce(
+        (sum, component) =>
+          sum +
+          component.maximumKm,
+        0
+      );
+
+  return {
+    distanceBeforeKm,
+    distanceAfterKm,
+    targetMinimumKm:
+      components[targetIndex]
+        .minimumKm,
+    targetMaximumKm:
+      components[targetIndex]
+        .maximumKm,
+  };
+}
+
+function getStructuredTargetPace(
+  session: MatchablePlannedSession,
+  matchedRuns: MatchableRun[]
+) {
+  if (matchedRuns.length !== 1) {
+    return null;
+  }
+
+  const boundaries =
+    getTargetBlockBoundaries(
+      session
+    );
+
+  const run = matchedRuns[0];
+  const laps = run.laps || [];
+
+  if (
+    !boundaries ||
+    laps.length === 0
+  ) {
+    return null;
+  }
+
+  const runDistanceKm =
+    getRunDistanceKm(run);
+
+  const blockStartKm =
+    boundaries.distanceBeforeKm;
+
+  const blockEndKm =
+    runDistanceKm -
+    boundaries.distanceAfterKm;
+
+  const blockDistanceKm =
+    blockEndKm -
+    blockStartKm;
+
+  if (
+    blockDistanceKm <= 0 ||
+    blockDistanceKm <
+      boundaries.targetMinimumKm -
+        0.25 ||
+    blockDistanceKm >
+      boundaries.targetMaximumKm +
+        0.25
+  ) {
+    return null;
+  }
+
+  let cursorKm = 0;
+  let targetDistanceKm = 0;
+  let targetTimeSeconds = 0;
+
+  for (const lap of laps) {
+    if (
+      typeof lap.distance !==
+        "number" ||
+      lap.distance <= 0
+    ) {
+      continue;
+    }
+
+    const timeSeconds =
+      typeof lap.moving_time ===
+        "number" &&
+      lap.moving_time > 0
+        ? lap.moving_time
+        : typeof lap.elapsed_time ===
+              "number" &&
+            lap.elapsed_time > 0
+          ? lap.elapsed_time
+          : 0;
+
+    const lapDistanceKm =
+      lap.distance / 1000;
+
+    const lapStartKm = cursorKm;
+    const lapEndKm =
+      cursorKm + lapDistanceKm;
+
+    cursorKm = lapEndKm;
+
+    if (timeSeconds <= 0) {
+      continue;
+    }
+
+    const overlapKm =
+      Math.max(
+        0,
+        Math.min(
+          lapEndKm,
+          blockEndKm
+        ) -
+          Math.max(
+            lapStartKm,
+            blockStartKm
+          )
+      );
+
+    if (overlapKm <= 0) {
+      continue;
+    }
+
+    targetDistanceKm +=
+      overlapKm;
+
+    targetTimeSeconds +=
+      timeSeconds *
+      (overlapKm /
+        lapDistanceKm);
+  }
+
+  if (
+    targetDistanceKm <
+      blockDistanceKm - 0.25 ||
+    targetTimeSeconds <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    paceSecondsPerKm:
+      targetTimeSeconds /
+      targetDistanceKm,
+    distanceKm:
+      targetDistanceKm,
+  };
+}
+
 function getLapPaces(
   run: MatchableRun
 ) {
@@ -457,12 +717,9 @@ function getLapPaces(
         return null;
       }
 
-      const distanceKm =
-        lap.distance / 1000;
-
       return (
         timeSeconds /
-        distanceKm
+        (lap.distance / 1000)
       );
     })
     .filter(
@@ -950,11 +1207,6 @@ function scorePace(
   session: MatchablePlannedSession,
   matchedRuns: MatchableRun[]
 ): SessionMatchComponent {
-  const actualPace =
-    getWeightedAveragePace(
-      matchedRuns
-    );
-
   const plannedType =
     normaliseSessionType(
       session.sessionType
@@ -964,6 +1216,35 @@ function scorePace(
     extractPaceRange(
       session.targetPaceText
     );
+
+  const structuredTarget =
+    paceRange &&
+    (
+      plannedType ===
+        "marathon-pace" ||
+      plannedType === "tempo" ||
+      plannedType ===
+        "threshold"
+    )
+      ? getStructuredTargetPace(
+          session,
+          matchedRuns
+        )
+      : null;
+
+  const actualPace =
+    structuredTarget
+      ?.paceSecondsPerKm ??
+    getWeightedAveragePace(
+      matchedRuns
+    );
+
+  const paceContext =
+    structuredTarget
+      ? ` across the ${formatDistance(
+          structuredTarget.distanceKm
+        )} target block`
+      : "";
 
   if (!paceRange) {
     if (
@@ -1047,7 +1328,7 @@ function scorePace(
       available: true,
       explanation: `${formatPace(
         actualPace
-      )} was within the planned pace range.`,
+      )}${paceContext} was within the planned pace range.`,
     };
   }
 
@@ -1079,7 +1360,7 @@ function scorePace(
     available: true,
     explanation: `${formatPace(
       actualPace
-    )} was approximately ${Math.round(
+    )}${paceContext} was approximately ${Math.round(
       deviation
     )} sec/km ${direction} than planned.`,
   };
