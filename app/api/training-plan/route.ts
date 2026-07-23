@@ -418,7 +418,7 @@ function extractTargetPace(value: string) {
     return null;
   }
 
-  return Array.from(new Set(matches)).join(" · ");
+  return Array.from(new Set(matches)).join(" | ");
 }
 
 function extractTotalVolumeKm(value: string) {
