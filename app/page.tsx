@@ -466,24 +466,6 @@ function getMatchStatusClass(
   return "";
 }
 
-function getScoreToneClass(
-  score: number | null
-) {
-  if (score === null) {
-    return "execution-score-neutral";
-  }
-
-  if (score >= 85) {
-    return "execution-score-success";
-  }
-
-  if (score >= 68) {
-    return "execution-score-primary";
-  }
-
-  return "execution-score-warning";
-}
-
 function getConfidenceBadgeClass(
   score: number
 ) {
@@ -1153,24 +1135,18 @@ export default function HomePage() {
 
               {todayMatch && (
                 <div className="execution-panel">
-                  <div className="execution-panel-heading">
-                    <div>
-                      <span>
-                        Plan versus Strava
-                      </span>
+    <div className="execution-panel-heading">
+  <div>
+    <span>Plan versus Strava</span>
+    <strong>{todayMatch.statusLabel}</strong>
+  </div>
 
-                      <strong>
-                        {
-                          todayMatch.statusLabel
-                        }
-                      </strong>
-                    </div>
-
-                    <div className="execution-score">
-  {todayMatch.statusLabel}
+  <div className="execution-score">
+    {todayMatch.statusLabel}
+  </div>
 </div>
 
-                  <p className="execution-verdict">
+<p className="execution-verdict">
                     {todayMatch.verdict}
                   </p>
 
@@ -1420,12 +1396,9 @@ export default function HomePage() {
         <MetricCard
           label="Weekly execution"
           value={
-            weekExecution.averageExecutionScore ===
-            null
-              ? "N/A"
-              : `${weekExecution.averageExecutionScore}%`
+            `${weekExecution.completionPercentage}%`
           }
-          context={`${weekExecution.completedCount} completed, ${weekExecution.partialCount} partial, ${weekExecution.missedCount} missed`}
+          context={`${weekExecution.completedCount} completed • ${weekExecution.partialCount} partial • ${weekExecution.missedCount} missed`}
         />
 
         <MetricCard
