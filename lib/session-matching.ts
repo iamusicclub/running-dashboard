@@ -104,16 +104,6 @@ export type WeekExecution = {
   upcomingCount: number;
   unverifiedCount: number;
   completionPercentage: number;
-  export type WeekExecution = {
-  plannedCount: number;
-  dueCount: number;
-  completedCount: number;
-  partialCount: number;
-  missedCount: number;
-  restCount: number;
-  upcomingCount: number;
-  unverifiedCount: number;
-  completionPercentage: number; 
 };
 
 type PaceRange = {
