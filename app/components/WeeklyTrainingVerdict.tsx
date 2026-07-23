@@ -141,7 +141,7 @@ export default function WeeklyTrainingVerdict({
           <span>Completed</span>
           <strong>{assessment.completedSessionCount}</strong>
           <small>
-            {assessment.partialSessionCount} partial Â·{" "}
+            {assessment.partialSessionCount} partial |{" "}
             {assessment.missedSessionCount} missed
           </small>
         </article>
