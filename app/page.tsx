@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   collection,
+  doc,
   getDocs,
   orderBy,
   query,
+  setDoc,
 } from "firebase/firestore";
 
 import { db } from "../lib/firebase";
@@ -16,6 +18,7 @@ import {
   matchSessionToRuns,
   matchTrainingWeek,
   type MatchableRun,
+  type ManualSessionStatus,
   type SessionMatchResult,
 } from "../lib/session-matching";
 
@@ -80,7 +83,7 @@ type TrainingPlanResponse = {
   error?: string;
 };
 
-const MALAGA_RACE_NAME = "Málaga Marathon";
+const MALAGA_RACE_NAME = "MÃ¡laga Marathon";
 const MALAGA_RACE_DATE = "2026-11-08";
 const MARATHON_DISTANCE_KM = 42.195;
 const TARGET_TIME = "2:59:59";
@@ -362,7 +365,7 @@ function formatWeekLabel(
 
   return `${formatDisplayDate(
     week.weekStartingDate
-  )} – ${formatDisplayDate(
+  )} â ${formatDisplayDate(
     week.weekEndingDate
   )}`;
 }
@@ -552,6 +555,10 @@ function MetricCard({
 
 export default function HomePage() {
   const [runs, setRuns] = useState<Run[]>([]);
+  const [sessionReviews, setSessionReviews] = useState<
+    Record<string, ManualSessionStatus>
+  >({});
+  const [savingReviewId, setSavingReviewId] = useState("");
 
   const [
     trainingWeeks,
@@ -581,6 +588,10 @@ export default function HomePage() {
           )
         );
 
+        const reviewsRequest = getDocs(
+          collection(db, "trainingSessionReviews")
+        );
+
         const planRequest = fetch(
           "/api/training-plan",
           {
@@ -605,9 +616,11 @@ export default function HomePage() {
 
         const [
           runsSnapshot,
+          reviewsSnapshot,
           planResponse,
         ] = await Promise.all([
           runsRequest,
+          reviewsRequest,
           planRequest,
         ]);
 
@@ -676,6 +689,15 @@ export default function HomePage() {
           );
 
         setRuns(loadedRuns);
+
+        const loadedReviews: Record<string, ManualSessionStatus> = {};
+        reviewsSnapshot.docs.forEach((document) => {
+          const status = document.data().manualStatus;
+          if (status === "completed" || status === "partial" || status === "missed") {
+            loadedReviews[document.id] = status;
+          }
+        });
+        setSessionReviews(loadedReviews);
 
         setTrainingWeeks(
           planResponse.weeks || []
@@ -767,10 +789,45 @@ export default function HomePage() {
         ? matchTrainingWeek(
             currentTrainingWeek.sessions,
             runs
-          )
+          ).map((result) => {
+            const manualStatus = sessionReviews[result.sessionId] ?? null;
+            return manualStatus
+              ? {
+                  ...result,
+                  manualStatus,
+                  status: manualStatus,
+                  statusLabel:
+                    manualStatus === "completed"
+                      ? "Completed"
+                      : manualStatus === "partial"
+                      ? "Partially completed"
+                      : "Missed",
+                }
+              : result;
+          })
         : [],
-    [currentTrainingWeek, runs]
+    [currentTrainingWeek, runs, sessionReviews]
   );
+
+  async function saveSessionReview(
+    sessionId: string,
+    manualStatus: Exclude<ManualSessionStatus, null>
+  ) {
+    setSavingReviewId(sessionId);
+    try {
+      await setDoc(
+        doc(db, "trainingSessionReviews", sessionId),
+        { sessionId, manualStatus, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
+      setSessionReviews((current) => ({
+        ...current,
+        [sessionId]: manualStatus,
+      }));
+    } finally {
+      setSavingReviewId("");
+    }
+  }
 
   const matchesByDate = useMemo(() => {
     const map = new Map<
@@ -967,7 +1024,7 @@ export default function HomePage() {
             <p className="hero-kicker">
               Project Sub-3
               <span>/</span>
-              Málaga 2026
+              MÃ¡laga 2026
             </p>
 
             <h1>{MALAGA_RACE_NAME}</h1>
@@ -975,7 +1032,7 @@ export default function HomePage() {
             <p className="hero-description">
               Execute the coach&apos;s plan,
               develop marathon-specific
-              endurance and arrive in Málaga
+              endurance and arrive in MÃ¡laga
               ready to run under three hours.
             </p>
           </div>
@@ -986,7 +1043,7 @@ export default function HomePage() {
             <div className="countdown-value">
               <strong>
                 {daysToRace === null
-                  ? "—"
+                  ? "â"
                   : Math.max(
                       0,
                       daysToRace
@@ -1398,7 +1455,7 @@ export default function HomePage() {
           value={
             `${weekExecution.completionPercentage}%`
           }
-          context={`${weekExecution.completedCount} completed • ${weekExecution.partialCount} partial • ${weekExecution.missedCount} missed`}
+          context={`${weekExecution.completedCount} completed â¢ ${weekExecution.partialCount} partial â¢ ${weekExecution.missedCount} missed`}
         />
 
         <MetricCard
@@ -1481,10 +1538,14 @@ export default function HomePage() {
                   >
                     <i />
 
-                    {matchResult
+                    {matchResult?.manualStatus
                       ? matchResult.statusLabel
+                      : matchResult?.status === "upcoming"
+                      ? "Upcoming"
+                      : matchResult?.status === "rest"
+                      ? "Rest day"
                       : plannedSession
-                      ? "Awaiting assessment"
+                      ? "Awaiting review"
                       : "Awaiting plan"}
                   </div>
 
@@ -1504,13 +1565,36 @@ export default function HomePage() {
                     </small>
                   )}
 
-           <div className="day-execution-score">
-  <span>Status</span>
-
-  <strong>
-    {matchResult?.statusLabel ?? "Awaiting review"}
-  </strong>
-</div>
+                  {plannedSession &&
+                    !plannedSession.isRestDay &&
+                    matchResult?.status !== "upcoming" && (
+                      <div className="week-review-buttons">
+                        {(["completed", "partial", "missed"] as const).map(
+                          (status) => (
+                            <button
+                              type="button"
+                              key={status}
+                              data-status={status}
+                              className={
+                                matchResult?.manualStatus === status
+                                  ? "is-selected"
+                                  : ""
+                              }
+                              disabled={savingReviewId === plannedSession.id}
+                              onClick={() =>
+                                saveSessionReview(plannedSession.id, status)
+                              }
+                            >
+                              {status === "completed"
+                                ? "Done"
+                                : status === "partial"
+                                ? "Partial"
+                                : "Missed"}
+                            </button>
+                          )
+                        )}
+                      </div>
+                    )}
 
                   {dayRuns.length > 0 && (
                     <div className="completed-run">
