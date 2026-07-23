@@ -56,7 +56,7 @@ function getRunDistanceKm(run: MatchableRun) {
 }
 
 function formatDuration(seconds?: number) {
-  if (!seconds || seconds <= 0) return "â";
+  if (!seconds || seconds <= 0) return "-";
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remainder = Math.round(seconds % 60);
@@ -258,10 +258,10 @@ export default function RunsPage() {
 
         <div className="training-sync-actions">
           <button type="button" onClick={connectStrava} disabled={connecting}>
-            {connecting ? "Connectingâ¦" : "Connect Strava"}
+            {connecting ? "Connecting..." : "Connect Strava"}
           </button>
           <button type="button" onClick={syncStrava} disabled={syncing}>
-            {syncing ? "Syncingâ¦" : "Sync Strava"}
+            {syncing ? "Syncing..." : "Sync Strava"}
           </button>
         </div>
       </section>
@@ -272,7 +272,7 @@ export default function RunsPage() {
       <section className="surface-card training-week-toolbar">
         <div>
           <p className="section-label">Training week</p>
-          <h2>{selectedWeek ? `${formatDate(selectedWeek.weekStartingDate)} â ${formatDate(selectedWeek.weekEndingDate)}` : "Select a week"}</h2>
+          <h2>{selectedWeek ? `${formatDate(selectedWeek.weekStartingDate)} - ${formatDate(selectedWeek.weekEndingDate)}` : "Select a week"}</h2>
         </div>
 
         <select
@@ -283,14 +283,14 @@ export default function RunsPage() {
           {weeks.map((week) => (
             <option key={week.id} value={week.id}>
               Week ending {formatDate(week.weekEndingDate)}
-              {week.phase ? ` Â· ${week.phase}` : ""}
+              {week.phase ? ` | ${week.phase}` : ""}
             </option>
           ))}
         </select>
       </section>
 
       {loading ? (
-        <section className="surface-card review-empty">Loading training planâ¦</section>
+        <section className="surface-card review-empty">Loading training plan...</section>
       ) : matches.length === 0 ? (
         <section className="surface-card review-empty">
           No planned sessions were found for this week.
@@ -334,7 +334,7 @@ export default function RunsPage() {
                         <p key={run.id}>
                           <strong>{run.name || "Run"}</strong>
                           <small>
-                            {getRunDistanceKm(run).toFixed(1)} km Â·{" "}
+                            {getRunDistanceKm(run).toFixed(1)} km |{" "}
                             {formatDuration(run.movingTimeSeconds)}
                           </small>
                         </p>
